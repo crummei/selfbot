@@ -1,30 +1,17 @@
-account_lists = {
-    'MY_ACCOUNTS': {
-        'MAIN': {
-        'USER_ID': 178939117420281866,
-        },
-        
-        'MAIN_ALT': {
-            'USER_ID': 485481984211288093,
-        },
-        
-        'YOURE_FATHER': {
-            'USER_ID': 1277627454663561227,
-        },
-        
-        'YOURE_MOTHER': {
-            'USER_ID': 363583460289413121,
-        },
+import json
+import os
+from src.paths import DATA_DIR
 
-        'HAVIC': {
-            'USER_ID': 993643724217262191,
-            },
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
-        'JEWBUSTER': {
-            'USER_ID': 815899789849526303,
-            },
-    },
-    'BRADLEY': {
-        'USER_ID': 1022513154623811655,
-    }
-}
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        # Fallback default if the file is missing
+        return {"account_lists": {}, "is_localhost": False}
+        
+    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_config(config_data):
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, indent=4)

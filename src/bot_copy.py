@@ -30,7 +30,7 @@ from src.paths import SRC_DIR, DATA_DIR, ENV_PATH
 model_path = os.path.join(DATA_DIR, "kokoro-v1.0.fp16.onnx")
 voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 
-from src.config import *
+from src.config import load_config, save_config
 
 from dotenv import load_dotenv # python-dotenv
 load_dotenv(ENV_PATH)
@@ -179,6 +179,37 @@ async def process_admin_commands(command):
         command_response = "\n🔄 Reloading Google Sheets data..."
         AIprompt.instructionsDict = await asyncio.to_thread(src.data.sheetsapi.main)
         return logging.INFO, command_response + "\n✅ Sheets data reloaded!"
+    
+    elif command.startswith("localhost"):
+        parts = command.split(" ", 1)
+        
+        if command.strip() == "localhost":
+            if src.config.is_localhost:
+                return logging.INFO, f"\n📋 Currently using localhost LLM"
+            else:
+                return logging.INFO, f"\n📋 Currently using API LLM: {AIprompt.model}"
+            
+        elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
+            
+            if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
+                
+                bot_config["is_localhost"] = True
+                save_config(bot_config)
+                
+                return logging.INFO, f"\n✅ Now using localhost LLM"
+            
+            elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
+            
+                bot_config["is_localhost"] = False
+                save_config(bot_config)
+                
+                return logging.INFO, f"\n✅ Now using API LLM: {AIprompt.model}"
+            
+            else:
+                return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost <True/False>"
+            
+        else:
+            return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
         
     elif command != "":
         return logging.WARNING, f"\n🤨 Unknown command: {command}"
@@ -481,7 +512,9 @@ async def on_message(message):
             return
 
 serverData = load_history()
-AIprompt.is_localhost = True
+bot_config = load_config()
+account_lists = bot_config.get("account_lists", {})
+
 AIprompt.instructionsDict = src.data.sheetsapi.main()
 # AIprompt.instructions = {
 #     '1': 'c2',
@@ -490,8 +523,8 @@ AIprompt.instructionsDict = src.data.sheetsapi.main()
 # }
 
 AIprompt.instructions = ['c2', 'r2', 'f2']
- 
-if not AIprompt.is_localhost:
+
+if not bot_config["is_localhost"]:
     AIprompt.model = 'llama-3.3-70b-versatile'
     
     chatClient = AsyncOpenAI(
