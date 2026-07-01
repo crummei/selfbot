@@ -512,7 +512,7 @@ else:
     AIprompt.model = 'qwen3.5-2b-uncensored-hauhaucs-aggressive'
 
     chatClient = AsyncOpenAI(
-        base_url="http://localhost:1234/v1",
+        base_url="http://10.2.0.2:1234/v1",
         api_key="lm-studio"
     )
 
