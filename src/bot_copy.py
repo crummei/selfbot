@@ -204,7 +204,7 @@ async def process_admin_commands(command):
         parts = command.split(" ", 1)
         
         if command.strip() == "localhost":
-            if src.config.is_localhost:
+            if bot_config.get("is_localhost", {}):
                 return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
             else:
                 return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
