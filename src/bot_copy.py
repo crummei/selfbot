@@ -1,4 +1,9 @@
+import re
+import random as rand
+import asyncio
+import time
 import os
+
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
@@ -12,9 +17,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )    
 
-import re
-import random as rand
-import asyncio
 import discord # pip install discord.py-self[voice]
 from discord.ext import commands
 import discord.ext.voice_recv as voice_recv
@@ -49,6 +51,7 @@ load_dotenv(ENV_PATH)
 # mistral-saba-24b
 
 active_sessions = {}
+last_voice_activity = {}
 
 client = commands.Bot(
     command_prefix='',
@@ -67,6 +70,27 @@ async def get_user_voice_channel(client: discord.Client, target_uid: int):
             
     # Return None if the user is not found in any visible voice channels
     return None
+
+async def voice_timeout():
+    await client.wait_until_ready()
+    
+    while not client.is_closed():
+        await asyncio.sleep(30) # Run this check every 30 seconds
+        
+        for vc in client.voice_clients:
+            # Condition 1: If the bot is the only one left in the channel
+            if len(vc.channel.members) <= 1:
+                logging.info(f"\n🚪 Left {vc.channel.name} (Channel empty)")
+                await vc.disconnect()
+                last_voice_activity.pop(vc.guild.id, None)
+                continue
+                
+            # Condition 2: If the bot has been inactive for 2 minutes (120 seconds)
+            last_active = last_voice_activity.get(vc.guild.id, time.time())
+            if not vc.is_playing() and (time.time() - last_active) > 120:
+                logging.info(f"\n🚪 Left {vc.channel.name} (Inactive for 2 minutes)")
+                await vc.disconnect()
+                last_voice_activity.pop(vc.guild.id, None)
 
 async def is_user_in_dict(target_id, data_dict = account_lists):
     for key, value in data_dict.items():
@@ -261,13 +285,13 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
                 
-                # 1. Clean the text BEFORE touching Kokoro
+                # Clean up the text
                 clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
                 
                 has_audio = False
                 voice_client = None
 
-                # 2. GENERATE AUDIO FIRST (Only if there is actual text left to speak)
+                # Generate audio if possible
                 if clean_text:
                     def _make_audio():
                         samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
@@ -276,7 +300,6 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                     await asyncio.to_thread(_make_audio)
                     has_audio = True
 
-                # 3. PREP THE VOICE CHANNEL (Silently connect/move while typing)
                 if has_audio:
                     target_vc = await get_user_voice_channel(client, int(user_id))
                     if target_vc:
@@ -286,25 +309,26 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                         if voice_client and voice_client.is_connected():
                             if voice_client.channel != target_vc:
                                 await voice_client.move_to(target_vc)
+                                last_voice_activity[guild.id] = time.time() # Reset timer on move
                         else:
                             voice_client = await target_vc.connect()
+                            last_voice_activity[guild.id] = time.time() # Reset timer on connect
 
                         if voice_client.is_playing():
                             voice_client.stop()
 
-                # 4. SIMULTANEOUS DELIVERY
                 # Send the text message
                 if message.channel.type == discord.ChannelType.private:
                     await message.channel.send(content=response)
                 else:
                     await message.reply(content=response, mention_author=False)
                     
-                # The exact millisecond the text sends, start playing the audio
                 if voice_client and has_audio:
                     audio_source = discord.FFmpegPCMAudio(Kokoro.audiofile)
                     voice_client.play(audio_source)
+                    last_voice_activity[voice_client.guild.id] = time.time() # Reset timer when speaking
 
-                # 5. Log and save history
+                # Log and save history
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
                 
                 allPrompts.append(combined_prompt)
@@ -425,6 +449,7 @@ async def on_ready():
     logging.info(f"Logged in as {client.user}\n-------------")
     
     client.loop.create_task(terminal_listener())
+    client.loop.create_task(voice_timeout())
 
 @client.event
 async def on_message(message):
