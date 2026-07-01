@@ -1,0 +1,30 @@
+account_lists = {
+    'MY_ACCOUNTS': {
+        'MAIN': {
+        'USER_ID': 178939117420281866,
+        },
+        
+        'MAIN_ALT': {
+            'USER_ID': 485481984211288093,
+        },
+        
+        'YOURE_FATHER': {
+            'USER_ID': 1277627454663561227,
+        },
+        
+        'YOURE_MOTHER': {
+            'USER_ID': 363583460289413121,
+        },
+
+        'HAVIC': {
+            'USER_ID': 993643724217262191,
+            },
+
+        'JEWBUSTER': {
+            'USER_ID': 815899789849526303,
+            },
+    },
+    'BRADLEY': {
+        'USER_ID': 1022513154623811655,
+    }
+}
