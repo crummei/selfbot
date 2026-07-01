@@ -223,7 +223,7 @@ async def process_admin_commands(command):
                 bot_config["is_localhost"] = False
                 save_config(bot_config)
                 
-                return logging.INFO, f"\n✅ Now using API LLM: {AIprompt.model}"
+                return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
             
             else:
                 return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost <True/False>"
