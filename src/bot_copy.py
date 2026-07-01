@@ -17,6 +17,9 @@ import discord.ext.voice_recv as voice_recv
 # from groq import AsyncGroq # pip install groq
 from openai import AsyncOpenAI, APIConnectionError # pip install openai
 from kokoro_onnx import Kokoro # pip install kokoro-onnx
+from kokoro_onnx.tokenizer import EspeakWrapper
+EspeakWrapper.set_data_path(None)
+EspeakWrapper.set_library("/data/data/com.termux/files/usr/lib/libespeak-ng.so")
 import soundfile as sf # pip install soundfile 
 import data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
 from history_manager import load_history, save_history
