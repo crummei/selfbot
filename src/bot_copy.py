@@ -15,10 +15,6 @@ logging.basicConfig(
 import re
 import random as rand
 import asyncio
-
-from dotenv import load_dotenv # python-dotenv
-load_dotenv()
-
 import discord # pip install discord.py-self[voice]
 from discord.ext import commands
 import discord.ext.voice_recv as voice_recv
@@ -30,12 +26,14 @@ import soundfile as sf # pip install soundfile
 import src.data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
 from src.history_manager import load_history, save_history
 
-from src.paths import SRC_DIR, DATA_DIR
+from src.paths import SRC_DIR, DATA_DIR, ENV_PATH
 model_path = os.path.join(DATA_DIR, "kokoro-v1.0.fp16.onnx")
 voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 
 from src.config import *
-    
+
+from dotenv import load_dotenv # python-dotenv
+load_dotenv(ENV_PATH)
 
 # llama-3.3-70b-versatile
 # llama-3.1-8b-instant

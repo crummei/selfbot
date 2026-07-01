@@ -12,6 +12,8 @@ ROOT_DIR = os.path.dirname(SRC_DIR)
 # 3. DATA_DIR: The path to your new 'data' folder.
 DATA_DIR = os.path.join(SRC_DIR, "data")
 
+ENV_PATH = os.path.join(ROOT_DIR, ".env")
+
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
     print(f"Created new data directory at: {DATA_DIR}")
