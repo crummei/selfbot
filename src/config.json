@@ -24,5 +24,7 @@
             "USER_ID": 1022513154623811655
         }
     },
-    "is_localhost": false
+    "is_localhost": false,
+    "local_model": "qwen3.5-2b-uncensored-hauhaucs-aggressive",
+    "API_model": "llama-3.3-70b-versatile"
 }

@@ -24,13 +24,17 @@ from openai import AsyncOpenAI, APIConnectionError # pip install openai
 from kokoro_onnx import Kokoro # pip install kokoro-onnx
 import soundfile as sf # pip install soundfile 
 import src.data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
 from src.history_manager import load_history, save_history
+serverData = load_history()
 
 from src.paths import SRC_DIR, DATA_DIR, ENV_PATH
 model_path = os.path.join(DATA_DIR, "kokoro-v1.0.fp16.onnx")
 voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 
 from src.config import load_config, save_config
+bot_config = load_config()
+account_lists = bot_config.get("account_lists", {})
 
 from dotenv import load_dotenv # python-dotenv
 load_dotenv(ENV_PATH)
@@ -97,15 +101,31 @@ async def process_admin_commands(command):
         parts = command.split(" ", 1)
         
         if command.strip() == "model":
-            return logging.INFO, f"\n📋 Current API model: {AIprompt.model}"
+            if not bot_config["is_localhost"]:
+                current_model = bot_config.get("API_model")
+                return logging.INFO, f"\n📋 Current API model: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+            else:
+                current_model = bot_config.get("local_model")
+                return logging.INFO, f"\n📋 Current localhost model: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
             
         elif len(parts) > 1 and parts[1].strip() != "":
-            AIprompt.model = parts[1].strip()
             
-            return logging.INFO, f"\n✅ Switching API model to: \"{AIprompt.model}\""
+            if not bot_config["is_localhost"]:
+                
+                bot_config["API_model"] = parts[1].strip()
+                save_config(bot_config)
+            
+                return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
+            
+            else:
+                
+                bot_config["local_model"] = parts[1].strip()
+                save_config(bot_config)
+            
+                return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
             
         else:
-            return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
+            return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
         
     elif command.startswith("instruct"):
         parts = command.split(" ", 2)
@@ -343,42 +363,56 @@ async def terminal_listener():
             logging.error(f"\n❗ Terminal listener error: {e}")
 
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
+    # Get and validate model
+    if not bot_config["is_localhost"]:
+        AIprompt.model = bot_config.get("API_model")
+        if not AIprompt.model:
+            raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
+            
+        chatClient = AsyncOpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.environ.get("GROQ_API_KEY")
+        )
+        
+    else:
+        AIprompt.model = bot_config.get("local_model")
+        if not AIprompt.model:
+            raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
+
+        chatClient = AsyncOpenAI(
+            base_url="http://192.168.0.139:1234/v1",
+            api_key="lm-studio"
+        )
+    
+    # Build full prompt
     messages = []
     
     if AIprompt.instructions:
         for position, value in enumerate(AIprompt.instructions):
-            messages.append(
-                {
-                    'role': 'system',
-                    'content': AIprompt.instructionsDict[str(value)],
-                }
-            )
+            messages.append({
+                'role': 'system',
+                'content': AIprompt.instructionsDict[str(value)],
+            })
     
-    # Define
     past_prompts = allPrompts[-3:]
     past_responses = allResponses[-3:]
     
-    # Append user and assistant messages alternatingly
     for p, r in zip(past_prompts, past_responses):
-        messages.append({
-            'role': 'user',
-            'content': p
-        })
+        messages.append({'role': 'user', 'content': p})
         messages.append({'role': 'assistant', 'content': r})
 
-    # Add context to prompt if exists
     if is_reply_to_bot and reference_msg is not None:
         messages.append({
             'role': 'system',
             'content': f"User is replying to \"\"\"\n\n{reference_msg.content}\n\"\"\""
         })
 
-    # Add current prompt to the end
     messages.append({
         'role': 'user',
         'content': f"User Input:\"\"\"\n\n{user_message}\n\"\"\""
     })
     
+    # Start chatCompletion
     chatCompletion = await chatClient.chat.completions.create(
         model=AIprompt.model,
         temperature=1.3,
@@ -511,10 +545,6 @@ async def on_message(message):
         else:
             return
 
-serverData = load_history()
-bot_config = load_config()
-account_lists = bot_config.get("account_lists", {})
-
 AIprompt.instructionsDict = src.data.sheetsapi.main()
 # AIprompt.instructions = {
 #     '1': 'c2',
@@ -523,22 +553,6 @@ AIprompt.instructionsDict = src.data.sheetsapi.main()
 # }
 
 AIprompt.instructions = ['c2', 'r2', 'f2']
-
-if not bot_config["is_localhost"]:
-    AIprompt.model = 'llama-3.3-70b-versatile'
-    
-    chatClient = AsyncOpenAI(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=os.environ.get("GROQ_API_KEY")
-    )
-    
-else:
-    AIprompt.model = 'qwen3.5-2b-uncensored-hauhaucs-aggressive'
-
-    chatClient = AsyncOpenAI(
-        base_url="http://192.168.0.139:1234/v1",
-        api_key="lm-studio"
-    )
 
 kokoro = Kokoro(model_path, voices_path)
 Kokoro.audiofile = os.path.join(DATA_DIR, "output.wav")
