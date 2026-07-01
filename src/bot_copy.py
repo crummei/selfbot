@@ -210,69 +210,60 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
                 
-                # typingDelay = rand.randint(500, 1200)/1000
-                # typingDelay += rand.uniform(0.02, 0.05) * len(response)
-                # # Cap the maximum delay to avoid making the user wait unnecessarily long for large responses
-                # await asyncio.sleep(min(typingDelay, 5.0))
+                # 1. Clean the text BEFORE touching Kokoro
+                clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
                 
+                has_audio = False
+                voice_client = None
+
+                # 2. GENERATE AUDIO FIRST (Only if there is actual text left to speak)
+                if clean_text:
+                    def _make_audio():
+                        samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
+                        sf.write(Kokoro.audiofile, samples, sample_rate)
+                        
+                    await asyncio.to_thread(_make_audio)
+                    has_audio = True
+
+                # 3. PREP THE VOICE CHANNEL (Silently connect/move while typing)
+                if has_audio:
+                    target_vc = await get_user_voice_channel(client, int(user_id))
+                    if target_vc:
+                        guild = target_vc.guild
+                        voice_client = guild.voice_client
+                        
+                        if voice_client and voice_client.is_connected():
+                            if voice_client.channel != target_vc:
+                                await voice_client.move_to(target_vc)
+                        else:
+                            voice_client = await target_vc.connect()
+
+                        if voice_client.is_playing():
+                            voice_client.stop()
+
+                # 4. SIMULTANEOUS DELIVERY
+                # Send the text message
+                if message.channel.type == discord.ChannelType.private:
+                    await message.channel.send(content=response)
+                else:
+                    await message.reply(content=response, mention_author=False)
+                    
+                # The exact millisecond the text sends, start playing the audio
+                if voice_client and has_audio:
+                    audio_source = discord.FFmpegPCMAudio(Kokoro.audiofile)
+                    voice_client.play(audio_source)
+
+                # 5. Log and save history
+                logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
+                
+                allPrompts.append(combined_prompt)
+                allResponses.append(response)
+                await asyncio.to_thread(save_history, serverData)
+
             except APIConnectionError as e:
                 logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
             except Exception as e:
-                logging.error(f"\nError generating AI response: {e}")
-        
-        if response:
-            try:
-                def _make_audio():
-                    # Generate the audio array
-                    samples, sample_rate = kokoro.create(re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response), voice="am_adam", speed=1.0, lang="en-us")
-                    # Save it to the file defined in your setup (Kokoro.audiofile)
-                    sf.write(Kokoro.audiofile, samples, sample_rate)
-                    
-                await asyncio.to_thread(_make_audio)
-                
-                target_vc = await get_user_voice_channel(client, int(user_id))
-                
-                if target_vc:
-                    guild = target_vc.guild
-                    voice_client = guild.voice_client
-                    
-                    # If already connected to a VC in this guild
-                    if voice_client and voice_client.is_connected():
-                        # Move if the bot is in a different channel than the user
-                        if voice_client.channel != target_vc:
-                            await voice_client.move_to(target_vc)
-                    else:
-                        # Not connected to any VC in this guild, so join
-                        voice_client = await target_vc.connect()
-
-                    # Stop any currently playing audio before starting the new one
-                    if voice_client.is_playing():
-                        voice_client.stop()
-                        
-                    # Play the generated file
-                    audio_source = discord.FFmpegPCMAudio(Kokoro.audiofile)
-                    voice_client.play(audio_source)
-                    
-                else:
-                    logging.info(f"\nUser {user_id} is not in a voice channel. Sending text, skipping voice.")
-                
-                if message.channel.type == discord.ChannelType.private:
-                    await message.channel.send(content=response)
-                    
-                else:
-                    await message.reply(content=response, mention_author=False)
-                
-                logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
-                
-                # Save combined prompts to history
-                allPrompts.append(combined_prompt)
-                allResponses.append(response)
-                
-                # logging.info(f"Combined Prompt:\n\"\"\"\n{combined_prompt}\n\"\"\"\n")
-                await asyncio.to_thread(save_history, serverData)
-
-            except Exception as e:
-                logging.error(f"\nError sending AI response or playing audio: {e}")
+                logging.error(f"\nError generating AI response or handling audio: {e}")
 
     except asyncio.CancelledError:
         pass
