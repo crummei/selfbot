@@ -4,6 +4,7 @@ google-auth-httplib2
 google-auth-oauthlib
 
 discord.py-self[voice]
+pynacl
 openai
 python-dotenv
 
