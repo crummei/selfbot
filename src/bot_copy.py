@@ -103,10 +103,10 @@ async def process_admin_commands(command):
         if command.strip() == "model":
             if not bot_config["is_localhost"]:
                 current_model = bot_config.get("API_model")
-                return logging.INFO, f"\n📋 Current API model: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+                return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
             else:
                 current_model = bot_config.get("local_model")
-                return logging.INFO, f"\n📋 Current localhost model: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+                return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
             
         elif len(parts) > 1 and parts[1].strip() != "":
             
@@ -205,9 +205,9 @@ async def process_admin_commands(command):
         
         if command.strip() == "localhost":
             if src.config.is_localhost:
-                return logging.INFO, f"\n📋 Currently using localhost LLM"
+                return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
             else:
-                return logging.INFO, f"\n📋 Currently using API LLM: {AIprompt.model}"
+                return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
             
         elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
             
