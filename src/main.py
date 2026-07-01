@@ -402,9 +402,11 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         AIprompt.model = bot_config.get("local_model")
         if not AIprompt.model:
             raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
+        
+        local_ip = os.environ.get("LM_STUDIO_IP", "127.0.0.1")
 
         chatClient = AsyncOpenAI(
-            base_url="http://192.168.0.139:1234/v1",
+            base_url=f"http://{local_ip}:1234/v1",
             api_key="lm-studio"
         )
     

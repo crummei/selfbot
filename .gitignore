@@ -1,7 +1,8 @@
-# Sensitive
+# Sensitive/dynamic
 google_api_serviceaccount.json
 chat_history.json
 kokoro-v1.0.fp16.onnx
+config.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
