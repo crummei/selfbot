@@ -1,15 +1,24 @@
 import os
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
 import logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(message)s",
     handlers=[logging.StreamHandler()]
 )    
+
 import re
 import random as rand
 import asyncio
+
 from dotenv import load_dotenv # python-dotenv
 load_dotenv()
+
 import discord # pip install discord.py-self[voice]
 from discord.ext import commands
 import discord.ext.voice_recv as voice_recv
@@ -17,16 +26,16 @@ import discord.ext.voice_recv as voice_recv
 # from groq import AsyncGroq # pip install groq
 from openai import AsyncOpenAI, APIConnectionError # pip install openai
 from kokoro_onnx import Kokoro # pip install kokoro-onnx
-from kokoro_onnx.tokenizer import EspeakWrapper
-EspeakWrapper.set_data_path(None)
-EspeakWrapper.set_library("/data/data/com.termux/files/usr/lib/libespeak-ng.so")
 import soundfile as sf # pip install soundfile 
-import data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
-from history_manager import load_history, save_history
-from paths import SRC_DIR, DATA_DIR
+import src.data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+from src.history_manager import load_history, save_history
+
+from src.paths import SRC_DIR, DATA_DIR
 model_path = os.path.join(DATA_DIR, "kokoro-v1.0.fp16.onnx")
 voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
-from config import *
+
+from src.config import *
+    
 
 # llama-3.3-70b-versatile
 # llama-3.1-8b-instant
@@ -170,7 +179,7 @@ async def process_admin_commands(command):
         
     elif command == "reload sheets":
         command_response = "\n🔄 Reloading Google Sheets data..."
-        AIprompt.instructionsDict = await asyncio.to_thread(data.sheetsapi.main)
+        AIprompt.instructionsDict = await asyncio.to_thread(src.data.sheetsapi.main)
         return logging.INFO, command_response + "\n✅ Sheets data reloaded!"
         
     elif command != "":
@@ -484,7 +493,7 @@ async def on_message(message):
 
 serverData = load_history()
 AIprompt.is_localhost = True
-AIprompt.instructionsDict = data.sheetsapi.main()
+AIprompt.instructionsDict = src.data.sheetsapi.main()
 # AIprompt.instructions = {
 #     '1': 'c2',
 #     '2': 'r2',
