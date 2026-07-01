@@ -8,16 +8,16 @@ logging.basicConfig(
 import re
 import random as rand
 import asyncio
-from dotenv import load_dotenv
+from dotenv import load_dotenv # python-dotenv
 load_dotenv()
-import discord # pip install discord.py-self
+import discord # pip install discord.py-self[voice]
 from discord.ext import commands
 import discord.ext.voice_recv as voice_recv
 
 # from groq import AsyncGroq # pip install groq
 from openai import AsyncOpenAI, APIConnectionError # pip install openai
-from kokoro_onnx import Kokoro
-import soundfile as sf
+from kokoro_onnx import Kokoro # pip install kokoro-onnx
+import soundfile as sf # pip install soundfile 
 import data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
 from history_manager import load_history, save_history
 from paths import SRC_DIR, DATA_DIR

@@ -1,0 +1,12 @@
+# Google Cloud API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+discord.py-self[voice]
+openai
+python-dotenv
+
+# TTS
+kokoro-onnx
+soundfile
