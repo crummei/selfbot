@@ -182,7 +182,7 @@ async def process_admin_commands(command):
                 
                 # Delete/remove an instruction
                 elif parts[1].strip() in {"delete", "remove"} and parts[2].strip() != "":
-                    removed_value = AIprompt.instructions.pop(int(parts[2].strip())+1)
+                    removed_value = AIprompt.instructions.pop(int(parts[2].strip())-1)
                     
                     if removed_value is not None:
                         return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
