@@ -136,98 +136,106 @@ async def process_admin_commands(command):
     #         return logging.WARNING, "\n⚡ Bot is already running..."
         
     if command.startswith("model"):
-        parts = command.split(" ", 1)
-        
-        if command.strip() == "model":
-            if not bot_config["is_localhost"]:
-                current_model = bot_config.get("API_model")
-                return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
-            else:
-                current_model = bot_config.get("local_model")
-                return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+        try:
+            parts = command.split(" ", 1)
             
-        elif len(parts) > 1 and parts[1].strip() != "":
-            
-            if not bot_config["is_localhost"]:
+            if command.strip() == "model":
+                if not bot_config["is_localhost"]:
+                    current_model = bot_config.get("API_model")
+                    return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+                else:
+                    current_model = bot_config.get("local_model")
+                    return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 
-                bot_config["API_model"] = parts[1].strip()
-                save_config(bot_config)
-            
-                return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
-            
-            else:
+            elif len(parts) > 1 and parts[1].strip() != "":
                 
-                bot_config["local_model"] = parts[1].strip()
-                save_config(bot_config)
-            
-                return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
-            
-        else:
+                if not bot_config["is_localhost"]:
+                    
+                    bot_config["API_model"] = parts[1].strip()
+                    save_config(bot_config)
+                
+                    return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
+                
+                else:
+                    
+                    bot_config["local_model"] = parts[1].strip()
+                    save_config(bot_config)
+                
+                    return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
+                
+            else:
+                return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
+        except:    
             return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
-        
     elif command.startswith("instruct"):
-        parts = command.split(" ", 2)
-        
-        if len(parts) > 1 and parts[1].strip() != "":
+        try:
+            parts = command.split(" ", 2)
             
-            # List all existing instructions
-            if parts[1].strip() == "list":
-                command_response = "\n📋 Current instructions:"
-                for position, value in enumerate(AIprompt.instructions, start = 1):
-                    command_response += f"\n{position}. {value}"
-                return logging.INFO, command_response
-            
-            # Delete/remove an instruction
-            elif parts[1].strip() in {"delete", "remove"} and parts[2].strip() != "":
-                removed_value = AIprompt.instructions.pop(int(parts[2].strip()))
+            if len(parts) > 1 and parts[1].strip() != "":
                 
-                if removed_value is not None:
-                    return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
-                    
-                else:
-                    return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
-                    
-            # Set/create an instruction
-            else:
+                # List all existing instructions
+                if parts[1].strip() == "list":
+                    command_response = "\n📋 Current instructions:"
+                    for position, value in enumerate(AIprompt.instructions, start = 1):
+                        command_response += f"\n{position}. {value}"
+                    return logging.INFO, command_response
                 
-                if len(parts) > 2 and parts[2].strip() != "":
+                # Delete/remove an instruction
+                elif parts[1].strip() in {"delete", "remove"} and parts[2].strip() != "":
+                    removed_value = AIprompt.instructions.pop(int(parts[2].strip()))
                     
-                    index = int(parts[1].strip())-1
-                    
-                    AIprompt.instructions[index] = parts[2].strip()
-                            
-                    return logging.INFO, f"\n✅ Switching instruction {parts[1].strip()} to: \"{parts[2].strip()}\""
-                    
+                    if removed_value is not None:
+                        return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
+                        
+                    else:
+                        return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
+                        
+                # Set/create an instruction
                 else:
-                    return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
+                    
+                    if len(parts) > 2 and parts[2].strip() != "":
+                        
+                        index = int(parts[1].strip())-1
+                        
+                        AIprompt.instructions[index] = parts[2].strip()
+                                
+                        return logging.INFO, f"\n✅ Switching instruction {parts[1].strip()} to: \"{parts[2].strip()}\""
+                        
+                    else:
+                        return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
+        except:
+            return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
 
     elif command.startswith("history"):
-        parts = command.split(" ", 3)
-        
-        if len(parts) > 2 and parts[1].strip() == "delete" and parts[2].strip() != "":
-            target = parts[2].strip()
+        try:
+            parts = command.split(" ", 3)
             
-            if target == "all":
-                serverData["user"].clear()
-                serverData["server"].clear()
-                save_history(serverData)
+            if len(parts) > 2 and parts[1].strip() == "delete" and parts[2].strip() != "":
+                target = parts[2].strip()
                 
-                return logging.INFO, f"\n✅ Cleared all history!"
-            
-            elif target in ["user", "server"] and len(parts) > 3 and parts[3].strip() != "":
-                ID = parts[3].strip()
-                
-                if serverData[target].pop(ID, None):
+                if target == "all":
+                    serverData["user"].clear()
+                    serverData["server"].clear()
                     save_history(serverData)
+                    
+                    return logging.INFO, f"\n✅ Cleared all history!"
                 
-                    return logging.INFO, f"\n✅ Cleared history for {target}: \"{ID}\""
-                
+                elif target in ["user", "server"] and len(parts) > 3 and parts[3].strip() != "":
+                    ID = parts[3].strip()
+                    
+                    if serverData[target].pop(ID, None):
+                        save_history(serverData)
+                    
+                        return logging.INFO, f"\n✅ Cleared history for {target}: \"{ID}\""
+                    
+                    else:
+                        return logging.WARNING, f"\n❌ {target.capitalize()} \"{ID}\" doesn't have history. Usage: history delete <all/user/server> *<user_id/server_id>"
                 else:
-                    return logging.WARNING, f"\n❌ {target.capitalize()} \"{ID}\" doesn't have history. Usage: history delete <all/user/server> *<user_id/server_id>"
+                    return logging.WARNING, "\n❌ Please provide all arguments. Usage: history delete <all/user/server> *<user_id/server_id>"
+
             else:
                 return logging.WARNING, "\n❌ Please provide all arguments. Usage: history delete <all/user/server> *<user_id/server_id>"
-
-        else:
+        except:
             return logging.WARNING, "\n❌ Please provide all arguments. Usage: history delete <all/user/server> *<user_id/server_id>"
 
     elif command == "status":
@@ -239,34 +247,37 @@ async def process_admin_commands(command):
         return logging.INFO, command_response + "\n✅ Sheets data reloaded!"
     
     elif command.startswith("localhost"):
-        parts = command.split(" ", 1)
-        
-        if command.strip() == "localhost":
-            if bot_config.get("is_localhost", {}):
-                return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
+        try:
+            parts = command.split(" ", 1)
+            
+            if command.strip() == "localhost":
+                if bot_config.get("is_localhost", {}):
+                    return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
+                else:
+                    return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
+                
+            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
+                
+                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
+                    
+                    bot_config["is_localhost"] = True
+                    save_config(bot_config)
+                    
+                    return logging.INFO, f"\n✅ Now using localhost LLM"
+                
+                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
+                
+                    bot_config["is_localhost"] = False
+                    save_config(bot_config)
+                    
+                    return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
+                
+                else:
+                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost <True/False>"
+                
             else:
-                return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
-            
-        elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
-            
-            if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
-                
-                bot_config["is_localhost"] = True
-                save_config(bot_config)
-                
-                return logging.INFO, f"\n✅ Now using localhost LLM"
-            
-            elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
-            
-                bot_config["is_localhost"] = False
-                save_config(bot_config)
-                
-                return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
-            
-            else:
-                return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost <True/False>"
-            
-        else:
+                return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
+        except:
             return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
         
     elif command != "":
