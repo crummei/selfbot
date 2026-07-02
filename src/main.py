@@ -82,8 +82,16 @@ async def voice_timeout():
             # Guild ID for servers, channel ID for groupchat
             activity_id = vc.guild.id if getattr(vc, 'guild', None) else vc.channel.id
             channel_name = getattr(vc.channel, 'name', 'Group Call') or 'Group Call'
-            member_count = len(vc.channel.voice_states) if hasattr(vc.channel, 'voice_states') else len(vc.channel.members)
-
+            
+            if hasattr(vc.channel, 'members'):
+                member_count = len(vc.channel.members)
+            elif hasattr(vc.channel, 'voice_states'):
+                member_count = len(vc.channel.voice_states)
+            else:
+                # Safe fallback for Group DMs. Assume 2 so it doesn't instantly leave. 
+                # The 120-second inactivity timer below will still catch it and disconnect it!
+                member_count = 2
+            
             # If the bot is alone in the channel
             if member_count <= 1:
                 logging.info(f"\n🚪 Left {channel_name} (Channel empty)")
