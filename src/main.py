@@ -58,17 +58,18 @@ client = commands.Bot(
     self_bot=False
 )
 
-async def get_user_voice_channel(client: discord.Client, target_uid: int):
-    # Iterate through all guilds the self-bot is currently in
+async def get_user_voice_channel(client: discord.Client, target_uid: int, message: discord.Message = None):
+    # Check if the message was sent in a groupchat
+    if message and isinstance(message.channel, discord.GroupChannel):
+        return message.channel
+
+    # Iterate through all guilds
     for guild in client.guilds:
-        # Attempt to find the user in the guild's cache
         member = guild.get_member(target_uid)
         
-        # If the member exists in this guild and has an active voice state
         if member and member.voice and member.voice.channel:
             return member.voice.channel
             
-    # Return None if the user is not found in any visible voice channels
     return None
 
 async def voice_timeout():
@@ -78,19 +79,24 @@ async def voice_timeout():
         await asyncio.sleep(30) # Run this check every 30 seconds
         
         for vc in client.voice_clients:
-            # Condition 1: If the bot is the only one left in the channel
-            if len(vc.channel.members) <= 1:
-                logging.info(f"\n🚪 Left {vc.channel.name} (Channel empty)")
+            # Guild ID for servers, channel ID for groupchat
+            activity_id = vc.guild.id if getattr(vc, 'guild', None) else vc.channel.id
+            channel_name = getattr(vc.channel, 'name', 'Group Call') or 'Group Call'
+            member_count = len(vc.channel.voice_states) if hasattr(vc.channel, 'voice_states') else len(vc.channel.members)
+
+            # If the bot is alone in the channel
+            if member_count <= 1:
+                logging.info(f"\n🚪 Left {channel_name} (Channel empty)")
                 await vc.disconnect()
-                last_voice_activity.pop(vc.guild.id, None)
+                last_voice_activity.pop(activity_id, None)
                 continue
                 
-            # Condition 2: If the bot has been inactive for 2 minutes (120 seconds)
-            last_active = last_voice_activity.get(vc.guild.id, time.time())
+            # If the bot is inactive for 2 minutes
+            last_active = last_voice_activity.get(activity_id, time.time())
             if not vc.is_playing() and (time.time() - last_active) > 120:
-                logging.info(f"\n🚪 Left {vc.channel.name} (Inactive for 2 minutes)")
+                logging.info(f"\n🚪 Left {channel_name} (Inactive for 2 minutes)")
                 await vc.disconnect()
-                last_voice_activity.pop(vc.guild.id, None)
+                last_voice_activity.pop(activity_id, None)
 
 async def is_user_in_dict(target_id, data_dict = account_lists):
     for key, value in data_dict.items():
@@ -301,32 +307,44 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                     has_audio = True
 
                 if has_audio:
-                    target_vc = await get_user_voice_channel(client, int(user_id))
+                    # Pass message to detect groupchats
+                    target_vc = await get_user_voice_channel(client, int(user_id), message)
+                    
                     if target_vc:
-                        guild = target_vc.guild
-                        voice_client = guild.voice_client
+                        is_server = hasattr(target_vc, 'guild') and target_vc.guild
                         
+                        # Route the connection properly based on type
+                        if is_server:
+                            voice_client = target_vc.guild.voice_client
+                            activity_id = target_vc.guild.id
+                        else:
+                            voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
+                            activity_id = target_vc.id
+
                         if voice_client and voice_client.is_connected():
                             if voice_client.channel != target_vc:
                                 await voice_client.move_to(target_vc)
-                                last_voice_activity[guild.id] = time.time() # Reset timer on move
+                                last_voice_activity[activity_id] = time.time()
                         else:
                             voice_client = await target_vc.connect()
-                            last_voice_activity[guild.id] = time.time() # Reset timer on connect
+                            last_voice_activity[activity_id] = time.time()
 
                         if voice_client.is_playing():
                             voice_client.stop()
 
-                # Send the text message
+                # Send message
                 if message.channel.type == discord.ChannelType.private:
                     await message.channel.send(content=response)
                 else:
                     await message.reply(content=response, mention_author=False)
                     
+                # Play audio and reset the correct timer ID
                 if voice_client and has_audio:
                     audio_source = discord.FFmpegPCMAudio(Kokoro.audiofile)
                     voice_client.play(audio_source)
-                    last_voice_activity[voice_client.guild.id] = time.time() # Reset timer when speaking
+                    
+                    activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
+                    last_voice_activity[activity_id] = time.time()
 
                 # Log and save history
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
