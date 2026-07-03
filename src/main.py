@@ -165,70 +165,94 @@ async def process_admin_commands(command):
                 
             else:
                 return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
-        except:    
-            return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
+        
+        except IndexError:
+            return logging.WARNING, "\n❌ You are missing the text. Usage: model <text>"
+        
+        except Exception as e:
+            return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
+        
     elif command.startswith("instruct"):
         try:
             parts = command.split(" ", 2)
             
             if len(parts) > 1 and parts[1].strip() != "":
                 
+                action = parts[1].strip()
+                
                 # List all existing instructions
-                if parts[1].strip() == "list":
-                    
+                if action == "list":
                     if "instructions" in bot_config and bot_config["instructions"]:
-                        
-                        # Create a formatted string using a list comprehension and enumerate
                         instruction_lines = [
                             f"{index}. {instruction}" 
                             for index, instruction in enumerate(bot_config["instructions"], start=1)
                         ]
-                        
-                        # Join the list into a single string with line breaks
                         formatted_list = "\n".join(instruction_lines)
-                        
                         return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
-                        
                     else:
                         return logging.WARNING, "\n⚠️ There are currently no instructions saved."
                 
                 # Delete/remove an instruction
-                elif parts[1].strip() in {"delete", "remove"} and parts[2].strip() != "":
-                    try:
-                        index_to_remove = int(parts[2].strip()) - 1
-                        
-                        if "instructions" in bot_config and 0 <= index_to_remove < len(bot_config["instructions"]):
-                            removed_value = bot_config["instructions"].pop(index_to_remove)
-                            save_config(bot_config)
+                elif action in {"delete", "remove"}:
+                    if len(parts) > 2 and parts[2].strip() != "":
+                        try:
+                            index_to_remove = int(parts[2].strip()) - 1
                             
-                            return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
+                            if "instructions" in bot_config and 0 <= index_to_remove < len(bot_config["instructions"]):
+                                removed_value = bot_config["instructions"].pop(index_to_remove)
+                                save_config(bot_config)
+                                return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
+                            else:
+                                return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
+                                
+                        except ValueError:
+                            return logging.WARNING, f"\n❌ Invalid position number: {parts[2].strip()}"
+                    else:
+                        return logging.WARNING, "\n❌ Please provide a position number. Usage: instruct delete <number>"
+
+                # Add an additional instruction entry
+                elif action == "add":
+                    # Safely check if parts[2] exists
+                    if len(parts) > 2 and parts[2].strip() != "":
+                        if "instructions" not in bot_config:
+                            bot_config["instructions"] = []
                             
-                        else:
-                            return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
-                            
-                    except ValueError:
-                        # Catches the error if the user types something like "delete apple" instead of "delete 1"
-                        return logging.WARNING, f"\n❌ Invalid position number: {parts[2].strip()}"
-                        
-                # Set/create an instruction
-                else:
-                    if "instructions" not in bot_config:
-                        bot_config["instructions"] = []
-                        
-                    new_instruction = parts[1].strip()
-                    
-                    if new_instruction != "":
+                        # Grab parts[2] (the text), NOT parts[1] (the word "add")
+                        new_instruction = parts[2].strip()
                         bot_config["instructions"].append(new_instruction)
                         save_config(bot_config)
                         
                         new_position = len(bot_config["instructions"])
-                        
                         return logging.INFO, f"\n✅ Added new instruction at Pos. {new_position}: \"{new_instruction}\""
-                        
                     else:
                         return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct add <text>"
-        except:
-            return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
+                 
+                # Replace an instruction
+                elif action.isdigit():
+                    if len(parts) > 2 and parts[2].strip() != "":
+                        index_to_replace = int(action) - 1
+                        
+                        if "instructions" in bot_config and 0 <= index_to_replace < len(bot_config["instructions"]):
+                            bot_config["instructions"][index_to_replace] = parts[2].strip()
+                            save_config(bot_config)
+                            return logging.INFO, f"\n✅ Switched instruction {action} to: \"{parts[2].strip()}\""
+                        else:
+                            return logging.WARNING, f"\n❌ No instruction exists in position: {action}"
+                    else:
+                        return logging.WARNING, "\n❌ Please provide the replacement text. Usage: instruct <number> <text>"
+                
+                # Catch-all error
+                else:
+                    return logging.WARNING, "\n❌ Invalid command. Usage: instruct [list | add <text> | delete <num> | <num> <text>]"
+        
+        except ValueError:
+            return logging.WARNING, "\n❌ That is not a valid number! Please use digits."
+        
+        except IndexError:
+            return logging.WARNING, "\n❌ You are missing the text. Usage: instruct add <text>"
+        
+        except Exception as e:
+            return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
 
     elif command.startswith("history"):
         try:
