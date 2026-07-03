@@ -175,34 +175,58 @@ async def process_admin_commands(command):
                 
                 # List all existing instructions
                 if parts[1].strip() == "list":
-                    command_response = "\n📋 Current instructions:"
-                    for position, value in enumerate(AIprompt.instructions, start = 1):
-                        command_response += f"\n{position}. {value}"
-                    return logging.INFO, command_response
+                    
+                    if "instructions" in bot_config and bot_config["instructions"]:
+                        
+                        # Create a formatted string using a list comprehension and enumerate
+                        instruction_lines = [
+                            f"{index}. {instruction}" 
+                            for index, instruction in enumerate(bot_config["instructions"], start=1)
+                        ]
+                        
+                        # Join the list into a single string with line breaks
+                        formatted_list = "\n".join(instruction_lines)
+                        
+                        return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
+                        
+                    else:
+                        return logging.WARNING, "\n⚠️ There are currently no instructions saved."
                 
                 # Delete/remove an instruction
                 elif parts[1].strip() in {"delete", "remove"} and parts[2].strip() != "":
-                    removed_value = AIprompt.instructions.pop(int(parts[2].strip())-1)
-                    
-                    if removed_value is not None:
-                        return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
+                    try:
+                        index_to_remove = int(parts[2].strip()) - 1
                         
-                    else:
-                        return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
+                        if "instructions" in bot_config and 0 <= index_to_remove < len(bot_config["instructions"]):
+                            removed_value = bot_config["instructions"].pop(index_to_remove)
+                            save_config(bot_config)
+                            
+                            return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
+                            
+                        else:
+                            return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
+                            
+                    except ValueError:
+                        # Catches the error if the user types something like "delete apple" instead of "delete 1"
+                        return logging.WARNING, f"\n❌ Invalid position number: {parts[2].strip()}"
                         
                 # Set/create an instruction
                 else:
+                    if "instructions" not in bot_config:
+                        bot_config["instructions"] = []
+                        
+                    new_instruction = parts[1].strip()
                     
-                    if len(parts) > 2 and parts[2].strip() != "":
+                    if new_instruction != "":
+                        bot_config["instructions"].append(new_instruction)
+                        save_config(bot_config)
                         
-                        index = int(parts[1].strip())-1
+                        new_position = len(bot_config["instructions"])
                         
-                        AIprompt.instructions[index] = parts[2].strip()
-                                
-                        return logging.INFO, f"\n✅ Switching instruction {parts[1].strip()} to: \"{parts[2].strip()}\""
+                        return logging.INFO, f"\n✅ Added new instruction at Pos. {new_position}: \"{new_instruction}\""
                         
                     else:
-                        return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
+                        return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct add <text>"
         except:
             return logging.WARNING, "\n❌ Please provide the place and its instruction. Usage: instruct <1, 2, etc.> <cell_name>"
 
@@ -598,7 +622,7 @@ async def on_message(message):
             # Add the new message to the buffer
             session['buffer'].append(user_message)
             
-            # Cancel the existing task if it's currently waiting or generating
+            # Cancel the existing task if it's currently waiting or generating½
             if session['task'] and not session['task'].done():
                 session['task'].cancel()
                 
@@ -610,13 +634,6 @@ async def on_message(message):
             return
 
 AIprompt.instructionsDict = src.data.sheetsapi.main()
-# AIprompt.instructions = {
-#     '1': 'c2',
-#     '2': 'r2',
-#     '3': 'f2',
-# }
-
-AIprompt.instructions = ['c2', 'r2', 'f2']
 
 kokoro = Kokoro(model_path, voices_path)
 Kokoro.audiofile = os.path.join(DATA_DIR, "output.wav")
