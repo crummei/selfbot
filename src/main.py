@@ -501,12 +501,15 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
     # Build full prompt
     messages = []
     
-    if AIprompt.instructions:
-        for position, value in enumerate(AIprompt.instructions):
-            messages.append({
-                'role': 'system',
-                'content': AIprompt.instructionsDict[str(value)],
-            })
+    if bot_config.get("instructions"):
+        for cell_ref in bot_config["instructions"]:
+            instruction_text = AIprompt.instructionsDict.get(str(cell_ref))
+        
+            if instruction_text:
+                messages.append({
+                    'role': 'system',
+                    'content': instruction_text, 
+                })
     
     past_prompts = allPrompts[-3:]
     past_responses = allResponses[-3:]
