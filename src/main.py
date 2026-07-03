@@ -557,6 +557,9 @@ async def on_message(message):
         await message.channel.send(log_message)
         return
     
+    if str(user_message).startswith("."):
+        return
+    
     is_reply_to_bot = False
     reference_msg = None
     
