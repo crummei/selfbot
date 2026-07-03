@@ -212,18 +212,21 @@ async def process_admin_commands(command):
 
                 # Add an additional instruction entry
                 elif action == "add":
-                    # Safely check if parts[2] exists
                     if len(parts) > 2 and parts[2].strip() != "":
                         if "instructions" not in bot_config:
                             bot_config["instructions"] = []
                             
-                        # Grab parts[2] (the text), NOT parts[1] (the word "add")
+                        # If it loads as a dictionary, convert to list
+                        elif isinstance(bot_config["instructions"], dict):
+                            bot_config["instructions"] = list(bot_config["instructions"].values())
+                            
                         new_instruction = parts[2].strip()
                         bot_config["instructions"].append(new_instruction)
                         save_config(bot_config)
                         
                         new_position = len(bot_config["instructions"])
                         return logging.INFO, f"\n✅ Added new instruction at Pos. {new_position}: \"{new_instruction}\""
+                        
                     else:
                         return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct add <text>"
                  
