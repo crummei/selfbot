@@ -4,7 +4,6 @@ import asyncio
 import time
 import os
 
-from src.STT import TranscriptSink, make_utterance_handler
 import numpy as np # pip install numpy
 from scipy.signal import resample_poly # pip install scipy
 from faster_whisper import WhisperModel  # pip install faster-whisper 
@@ -31,6 +30,7 @@ from openai import AsyncOpenAI, APIConnectionError # pip install openai
 from kokoro_onnx import Kokoro # pip install kokoro-onnx
 import soundfile as sf # pip install soundfile 
 import src.data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+from src.STT import TranscriptSink, make_utterance_handler
 
 from src.history_manager import load_history, save_history
 serverData = load_history()
