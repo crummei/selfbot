@@ -4,10 +4,6 @@ import asyncio
 import time
 import os
 
-import numpy as np # pip install numpy
-from scipy.signal import resample_poly # pip install scipy
-from faster_whisper import WhisperModel  # pip install faster-whisper 
-
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
@@ -30,7 +26,6 @@ from openai import AsyncOpenAI, APIConnectionError # pip install openai
 from kokoro_onnx import Kokoro # pip install kokoro-onnx
 import soundfile as sf # pip install soundfile 
 import src.data.sheetsapi # pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
-from src.STT import TranscriptSink, make_utterance_handler
 
 from src.history_manager import load_history, save_history
 serverData = load_history()
@@ -430,11 +425,7 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                                 last_voice_activity[activity_id] = time.time()
                                 
                         else:
-                            if is_server:
-                                voice_client = await target_vc.connect(cls=voice_recv.VoiceRecvClient)
-                                voice_client.listen(stt_sink)
-                            else:
-                                voice_client = await target_vc.connect()
+                            voice_client = await target_vc.connect()
                             last_voice_activity[activity_id] = time.time()
                             
                         if voice_client.is_playing():
@@ -651,11 +642,7 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
     return chatCompletion
 
 @client.event
-async def on_ready():
-    global stt_sink
-    on_voice_utterance = make_utterance_handler(client, active_sessions, whisper_model, speak_ai_response)
-    stt_sink = TranscriptSink(client.loop, on_voice_utterance)
-    
+async def on_ready(): 
     logging.info(f"Logged in as {client.user}\n-------------")
     client.loop.create_task(terminal_listener())
     client.loop.create_task(voice_timeout())
@@ -789,7 +776,5 @@ AIprompt.instructionsDict = src.data.sheetsapi.main()
 
 kokoro = Kokoro(model_path, voices_path)
 Kokoro.audiofile = os.path.join(DATA_DIR, "output.wav")
-
-whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
 
 client.run(os.getenv('YOURE_FATHER'))
