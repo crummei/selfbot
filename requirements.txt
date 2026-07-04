@@ -11,3 +11,8 @@ python-dotenv
 # TTS
 kokoro-onnx
 soundfile
+
+# Speech recognition
+faster-whisper
+numpy
+scipy

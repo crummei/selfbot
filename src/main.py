@@ -4,6 +4,11 @@ import asyncio
 import time
 import os
 
+from src.STT import TranscriptSink, make_utterance_handler
+import numpy as np # pip install numpy
+from scipy.signal import resample_poly # pip install scipy
+from faster_whisper import WhisperModel  # pip install faster-whisper 
+
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
@@ -78,7 +83,7 @@ async def voice_timeout():
     while not client.is_closed():
         await asyncio.sleep(30) # Run this check every 30 seconds
         
-        for vc in client.voice_clients:
+        for vc in list(client.voice_clients):
             # Guild ID for servers, channel ID for groupchat
             activity_id = vc.guild.id if getattr(vc, 'guild', None) else vc.channel.id
             channel_name = getattr(vc.channel, 'name', 'Group Call') or 'Group Call'
@@ -105,6 +110,30 @@ async def voice_timeout():
                 logging.info(f"\n🚪 Left {channel_name} (Inactive for 2 minutes)")
                 await vc.disconnect()
                 last_voice_activity.pop(activity_id, None)
+
+def is_user_in_vc(target_vc, user_id: int) -> bool:
+    # Check whether user_id is currently present in target_vc (guild channel or group call)
+    user_id = int(user_id)
+
+    if hasattr(target_vc, 'members'):        # Guild voice/stage channel
+        return any(m.id == user_id for m in target_vc.members)
+
+    if hasattr(target_vc, 'voice_states'):    # Group DM call
+        return user_id in target_vc.voice_states
+
+    return False
+
+async def wait_for_user_in_vc(target_vc, user_id: int, timeout: float = 60, poll_interval: float = 1.0) -> bool:
+    # Poll until user_id joins target_vc, or give up after `timeout` seconds
+    waited = 0.0
+
+    while waited < timeout:
+        if is_user_in_vc(target_vc, user_id):
+            return True
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+
+    return is_user_in_vc(target_vc, user_id)  # one last check right at the deadline
 
 async def is_user_in_dict(target_id, data_dict = account_lists):
     for key, value in data_dict.items():
@@ -286,7 +315,7 @@ async def process_admin_commands(command):
 
             else:
                 return logging.WARNING, "\n❌ Please provide all arguments. Usage: history delete <all/user/server> *<user_id/server_id>"
-        except:
+        except (KeyError, ValueError):
             return logging.WARNING, "\n❌ Please provide all arguments. Usage: history delete <all/user/server> *<user_id/server_id>"
 
     elif command == "status":
@@ -328,65 +357,69 @@ async def process_admin_commands(command):
                 
             else:
                 return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
-        except:
+        except (KeyError, ValueError):
             return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
         
     elif command != "":
         return logging.WARNING, f"\n🤨 Unknown command: {command}"
 
-async def process_combined_messages(user_id, message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
+async def process_combined_messages(session_key, user_id, message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
+    combined_prompt = None
+    responded = False
+    
     try:
-        # totalDelay = 8
-        # minDelay = rand.randint(800, 3000)/1000
-        # typingDelay = max(rand.randint(totalDelay*100, totalDelay*800)/1000, minDelay)
+        totalDelay = 8
+        minDelay = rand.randint(800, 3000)/1000
+        typingDelay = max(rand.randint(totalDelay*100, totalDelay*800)/1000, minDelay)
         
-        # # await asyncio.sleep(totalDelay-typingDelay)
+        # await asyncio.sleep(totalDelay-typingDelay)
         
-        # # Human typing delay
-        # async with message.channel.typing():
-        #     await asyncio.sleep(typingDelay)
+        # Human typing delay
+        async with message.channel.typing():
+            await asyncio.sleep(typingDelay)
         
         # Timer finished. Combine buffer
-        session = active_sessions[user_id]
+    
+        session = active_sessions[session_key]
         combined_prompt = "\n".join(session['buffer'])
-        
-        # Clear the buffer for the next conversation
         session['buffer'] = []
-        
+
         response = None
-        # Start typing and generate the response
         async with message.channel.typing():
             try:
                 chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
-                
-                # Clean up the text
+
                 clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
-                
+
                 has_audio = False
                 voice_client = None
+                target_vc = None
+                audio_path = None
 
-                # Generate audio if possible
                 if clean_text:
+                    # Per-session file so concurrent generations never clobber each other
+                    safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
+                    audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
+
                     def _make_audio():
                         samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
-                        sf.write(Kokoro.audiofile, samples, sample_rate)
-                        
+                        sf.write(audio_path, samples, sample_rate)
+
                     await asyncio.to_thread(_make_audio)
                     has_audio = True
 
                 if has_audio:
-                    # Pass message to detect groupchats
                     target_vc = await get_user_voice_channel(client, int(user_id), message)
-                    
+
                     if target_vc:
                         is_server = hasattr(target_vc, 'guild') and target_vc.guild
-                        
-                        # Route the connection properly based on type
+
                         if is_server:
                             voice_client = target_vc.guild.voice_client
                             activity_id = target_vc.guild.id
+                            
                         else:
                             voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
                             activity_id = target_vc.id
@@ -395,33 +428,40 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                             if voice_client.channel != target_vc:
                                 await voice_client.move_to(target_vc)
                                 last_voice_activity[activity_id] = time.time()
+                                
                         else:
-                            voice_client = await target_vc.connect()
+                            voice_client = await target_vc.connect(cls=voice_recv.VoiceRecvClient)
+                            voice_client.listen(stt_sink)
                             last_voice_activity[activity_id] = time.time()
-
+                            
                         if voice_client.is_playing():
                             voice_client.stop()
 
-                # Send message
+                # Send the text reply
                 if message.channel.type == discord.ChannelType.private:
                     await message.channel.send(content=response)
                 else:
                     await message.reply(content=response, mention_author=False)
-                    
-                # Play audio and reset the correct timer ID
-                if voice_client and has_audio:
-                    audio_source = discord.FFmpegPCMAudio(Kokoro.audiofile)
-                    voice_client.play(audio_source)
-                    
-                    activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
-                    last_voice_activity[activity_id] = time.time()
 
-                # Log and save history
+                # The user has their answer now — never requeue combined_prompt past this
+                # point, and persist history regardless of what happens with voice below.
+                responded = True
+
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
-                
                 allPrompts.append(combined_prompt)
                 allResponses.append(response)
                 await asyncio.to_thread(save_history, serverData)
+
+                # Voice playback is best-effort from here — failures shouldn't undo the above
+                if voice_client and has_audio:
+                    if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
+                        audio_source = discord.FFmpegPCMAudio(audio_path)
+                        voice_client.play(audio_source)
+
+                        activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
+                        last_voice_activity[activity_id] = time.time()
+                    else:
+                        logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
 
             except APIConnectionError as e:
                 logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
@@ -429,15 +469,21 @@ async def process_combined_messages(user_id, message, allPrompts, allResponses, 
                 logging.error(f"\nError generating AI response or handling audio: {e}")
 
     except asyncio.CancelledError:
-        pass
-    
+        # Don't drop the user's text if we're cancelled before answering — requeue it so
+        # the next debounced run picks it up.
+        if not responded and combined_prompt and session_key in active_sessions:
+            active_sessions[session_key]['buffer'].insert(0, combined_prompt)
+
     finally:
-        if user_id in active_sessions and active_sessions[user_id]['task'] == asyncio.current_task():
-            active_sessions[user_id]['task'] = None  
-            
-            # Delete session if empty to prevent memory leak
-            if not active_sessions[user_id]['buffer']:
-                del active_sessions[user_id]
+        if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
+            active_sessions[session_key]['task'] = None
+            if not active_sessions[session_key]['buffer']:
+                del active_sessions[session_key]
+
+def normalize_command(raw: str) -> str:
+    parts = raw.split(" ", 1)
+    parts[0] = parts[0].lower()
+    return " ".join(parts)
 
 async def terminal_listener():
     await client.wait_until_ready()
@@ -445,7 +491,7 @@ async def terminal_listener():
     while client.is_ready():
         try:
             user_input = await asyncio.to_thread(input)
-            command = user_input.strip().lower()
+            command = normalize_command(user_input.strip())
             
             result = await process_admin_commands(command)
             
@@ -473,6 +519,70 @@ async def terminal_listener():
             break
         except Exception as e:
             logging.error(f"\n❗ Terminal listener error: {e}")
+
+async def speak_ai_response(session_key, user_id, voice_client):
+    combined_prompt = None
+    responded = False
+
+    try:
+        session = active_sessions[session_key]
+        combined_prompt = "\n".join(session['buffer'])
+        session['buffer'] = []
+
+        # Voice sessions get their own ephemeral history for now, separate from
+        # DM/server text history — say if you'd rather they share one thread.
+        if session_key not in serverData.setdefault("voice", {}):
+            serverData["voice"][session_key] = {'allPrompts': [], 'allResponses': []}
+        allPrompts = serverData["voice"][session_key]['allPrompts']
+        allResponses = serverData["voice"][session_key]['allResponses']
+
+        try:
+            chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses)
+            response = chatCompletion.choices[0].message.content
+            response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
+            clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
+
+            if not clean_text:
+                responded = True
+                return
+
+            safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
+            audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
+
+            def _make_audio():
+                samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
+                sf.write(audio_path, samples, sample_rate)
+
+            await asyncio.to_thread(_make_audio)
+
+            responded = True
+            logging.info(f"\n==========================\nVoice User:\n{combined_prompt}\n\nResponse: {response}\n==========================")
+            allPrompts.append(combined_prompt)
+            allResponses.append(response)
+            await asyncio.to_thread(save_history, serverData)
+
+            if voice_client.is_playing():
+                voice_client.stop()
+
+            voice_client.play(discord.FFmpegPCMAudio(audio_path))
+
+            activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
+            last_voice_activity[activity_id] = time.time()
+
+        except APIConnectionError as e:
+            logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
+        except Exception as e:
+            logging.error(f"\nError generating voice AI response: {e}")
+
+    except asyncio.CancelledError:
+        if not responded and combined_prompt and session_key in active_sessions:
+            active_sessions[session_key]['buffer'].insert(0, combined_prompt)
+
+    finally:
+        if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
+            active_sessions[session_key]['task'] = None
+            if not active_sessions[session_key]['buffer']:
+                del active_sessions[session_key]
 
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
     # Get and validate model
@@ -539,8 +649,11 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
 
 @client.event
 async def on_ready():
-    logging.info(f"Logged in as {client.user}\n-------------")
+    global stt_sink
+    on_voice_utterance = make_utterance_handler(client, active_sessions, whisper_model, speak_ai_response)
+    stt_sink = TranscriptSink(client.loop, on_voice_utterance)
     
+    logging.info(f"Logged in as {client.user}\n-------------")
     client.loop.create_task(terminal_listener())
     client.loop.create_task(voice_timeout())
 
@@ -552,12 +665,12 @@ async def on_message(message):
     
     user_message = message.content if message.content else ''
     
-    if str(user_message).startswith("*") and await is_user_in_dict(message.author.id):
-        log_level, log_message = await process_admin_commands(user_message.lstrip('*'))
-        await message.channel.send(log_message)
+    if str(user_message).startswith("."):
         return
     
-    if str(user_message).startswith("."):
+    if str(user_message).startswith("*") and await is_user_in_dict(message.author.id):
+        log_level, log_message = await process_admin_commands(normalize_command(user_message.lstrip('*')))
+        await message.channel.send(log_message)
         return
     
     is_reply_to_bot = False
@@ -589,10 +702,12 @@ async def on_message(message):
             # Check for mentions
             if message.mentions and not is_reply_to_bot:
                 user = str(message.raw_mentions).strip('[]')
-                await message.channel.send(f"<@{user}>")
+                mention_text = " ".join(f"<@{uid}>" for uid in message.raw_mentions)
+                await message.channel.send(mention_text)
                 return
             
             userID = str(message.author.id)
+            session_key = f"dm:{userID}"
             
             # Initialize DM data if it doesn't exist
             if userID not in serverData["user"]:
@@ -607,10 +722,10 @@ async def on_message(message):
             allResponses = serverData["user"][userID]['allResponses']
             
             # Initialize Active Session Data (The Buffer)
-            if userID not in active_sessions:
-                active_sessions[userID] = {'buffer': [], 'task': None}
+            if session_key not in active_sessions:
+                active_sessions[session_key] = {'buffer': [], 'task': None}
                 
-            session = active_sessions[userID]
+            session = active_sessions[session_key]
             
             # Add the new message to the buffer
             session['buffer'].append(user_message)
@@ -621,7 +736,7 @@ async def on_message(message):
                 
             # 6. Create a fresh task with the new buffer
             session['task'] = asyncio.create_task(
-                process_combined_messages(userID, message, allPrompts, allResponses, is_reply_to_bot, reference_msg)
+                process_combined_messages(session_key, userID, message, allPrompts, allResponses, is_reply_to_bot, reference_msg)
             )
                 
         # Don't remove, disabling is only temporary
@@ -636,21 +751,22 @@ async def on_message(message):
             
             guildID = str(message.guild.id)
             userID = str(message.author.id)
+            session_key = f"server:{guildID}:{userID}"
             
-            if guildID not in serverData["server"]:
-                logging.info(f"Initializing data for server {guildID}")
-                serverData["server"][guildID] = {
+            if session_key not in serverData["server"]:
+                logging.info(f"Initializing data for server {session_key}")
+                serverData["server"][session_key] = {
                     'allPrompts': [],
                     'allResponses': []
                 }
 
-            serverPrompts = serverData["server"][guildID]['allPrompts']
-            serverResponses = serverData["server"][guildID]['allResponses']
+            serverPrompts = serverData["server"][session_key]['allPrompts']
+            serverResponses = serverData["server"][session_key]['allResponses']
             
-            if userID not in active_sessions:
-                active_sessions[userID] = {'buffer': [], 'task': None}
+            if session_key not in active_sessions:
+                active_sessions[session_key] = {'buffer': [], 'task': None}
                 
-            session = active_sessions[userID]
+            session = active_sessions[session_key]
             
             # Add the new message to the buffer
             session['buffer'].append(user_message)
@@ -661,7 +777,7 @@ async def on_message(message):
                 
             # Create a fresh task with the new buffer, passing SERVER history instead of DM history
             session['task'] = asyncio.create_task(
-                process_combined_messages(userID, message, serverPrompts, serverResponses, is_reply_to_bot, reference_msg)
+                process_combined_messages(session_key, userID, message, serverPrompts, serverResponses, is_reply_to_bot, reference_msg)
             )
         else:
             return
@@ -670,5 +786,7 @@ AIprompt.instructionsDict = src.data.sheetsapi.main()
 
 kokoro = Kokoro(model_path, voices_path)
 Kokoro.audiofile = os.path.join(DATA_DIR, "output.wav")
+
+whisper_model = WhisperModel("base.en", device="cuda", compute_type="int8")
 
 client.run(os.getenv('YOURE_FATHER'))
