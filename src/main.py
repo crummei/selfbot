@@ -787,6 +787,6 @@ AIprompt.instructionsDict = src.data.sheetsapi.main()
 kokoro = Kokoro(model_path, voices_path)
 Kokoro.audiofile = os.path.join(DATA_DIR, "output.wav")
 
-whisper_model = WhisperModel("base.en", device="cuda", compute_type="int8")
+whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
 
 client.run(os.getenv('YOURE_FATHER'))
