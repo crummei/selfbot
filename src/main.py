@@ -430,8 +430,11 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                                 last_voice_activity[activity_id] = time.time()
                                 
                         else:
-                            voice_client = await target_vc.connect(cls=voice_recv.VoiceRecvClient)
-                            voice_client.listen(stt_sink)
+                            if is_server:
+                                voice_client = await target_vc.connect(cls=voice_recv.VoiceRecvClient)
+                                voice_client.listen(stt_sink)
+                            else:
+                                voice_client = await target_vc.connect()
                             last_voice_activity[activity_id] = time.time()
                             
                         if voice_client.is_playing():
