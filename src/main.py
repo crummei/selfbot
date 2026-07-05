@@ -58,6 +58,10 @@ client = commands.Bot(
     self_bot=False
 )
 
+# -----------------------------
+#       Helper Functions
+# -----------------------------
+
 async def get_user_voice_channel(client: discord.Client, target_uid: int, message: discord.Message = None):
     # Check if the message was sent in a groupchat
     if message and isinstance(message.channel, discord.GroupChannel):
@@ -85,11 +89,11 @@ async def voice_timeout():
             
             if hasattr(vc.channel, 'members'):
                 member_count = len(vc.channel.members)
+
             elif hasattr(vc.channel, 'voice_states'):
                 member_count = len(vc.channel.voice_states)
+
             else:
-                # Safe fallback for Group DMs. Assume 2 so it doesn't instantly leave. 
-                # The 120-second inactivity timer below will still catch it and disconnect it!
                 member_count = 2
             
             # If the bot is alone in the channel
@@ -128,7 +132,7 @@ async def wait_for_user_in_vc(target_vc, user_id: int, timeout: float = 60, poll
         await asyncio.sleep(poll_interval)
         waited += poll_interval
 
-    return is_user_in_vc(target_vc, user_id)  # one last check right at the deadline
+    return is_user_in_vc(target_vc, user_id)
 
 async def is_user_in_dict(target_id, data_dict = account_lists):
     for key, value in data_dict.items():
@@ -140,6 +144,16 @@ async def is_user_in_dict(target_id, data_dict = account_lists):
                 return True
             
     return False
+
+def normalize_command(raw: str) -> str:
+    parts = raw.split(" ", 1)
+    parts[0] = parts[0].lower()
+    return " ".join(parts)
+
+
+# -----------------------------
+#            Processing
+# -----------------------------
 
 async def process_admin_commands(command):
     # if command in {"stop", "quit", "exit", "q"}:
@@ -215,6 +229,30 @@ async def process_admin_commands(command):
                         return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
                     else:
                         return logging.WARNING, "\n⚠️ There are currently no instructions saved."
+
+                # Experiment, unfinished...
+                # if action == "list":
+                #     if len(parts) > 2 and parts[2].strip() == "selected":
+                #         if "instructions" in bot_config and bot_config["instructions"]:
+                #             instruction_lines = [
+                #                 f"{index}. {instruction}" 
+                #                 for index, instruction in enumerate(bot_config["instructions"], start=1)
+                #             ]
+                #             formatted_list = "\n".join(instruction_lines)
+                #             return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
+                #         else:
+                #             return logging.WARNING, "\n⚠️ There are currently no instructions saved."
+                    
+                #     if len(parts) > 2 and parts[2].strip() == "all":
+                #         if "instructions" in bot_config and bot_config["instructions"]:
+                #             instruction_lines = [
+                #                 f"{index}. {instruction}" 
+                #                 for index, instruction in enumerate(bot_config["instructions"], start=1)
+                #             ]
+                #             formatted_list = "\n".join(instruction_lines)
+                #             return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
+                #         else:
+                #             return logging.WARNING, "\n⚠️ There are currently no instructions saved."     
                 
                 # Delete/remove an instruction
                 elif action in {"delete", "remove"}:
@@ -386,59 +424,58 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
 
-                clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
+                # clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
-                has_audio = False
-                voice_client = None
-                target_vc = None
-                audio_path = None
+                # has_audio = False
+                # voice_client = None
+                # target_vc = None
+                # audio_path = None
 
-                if clean_text:
-                    # Per-session file so concurrent generations never clobber each other
-                    safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
-                    audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
+                # if clean_text:
+                #     # Per-session file so concurrent generations never clobber each other
+                #     safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
+                #     audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
 
-                    def _make_audio():
-                        samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
-                        sf.write(audio_path, samples, sample_rate)
+                #     def _make_audio():
+                #         samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
+                #         sf.write(audio_path, samples, sample_rate)
 
-                    await asyncio.to_thread(_make_audio)
-                    has_audio = True
+                #     await asyncio.to_thread(_make_audio)
+                #     has_audio = True
 
-                if has_audio:
-                    target_vc = await get_user_voice_channel(client, int(user_id), message)
+                # if has_audio:
+                #     target_vc = await get_user_voice_channel(client, int(user_id), message)
 
-                    if target_vc:
-                        is_server = hasattr(target_vc, 'guild') and target_vc.guild
+                #     if target_vc:
+                #         is_server = hasattr(target_vc, 'guild') and target_vc.guild
 
-                        if is_server:
-                            voice_client = target_vc.guild.voice_client
-                            activity_id = target_vc.guild.id
+                #         if is_server:
+                #             voice_client = target_vc.guild.voice_client
+                #             activity_id = target_vc.guild.id
                             
-                        else:
-                            voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
-                            activity_id = target_vc.id
+                #         else:
+                #             voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
+                #             activity_id = target_vc.id
 
-                        if voice_client and voice_client.is_connected():
-                            if voice_client.channel != target_vc:
-                                await voice_client.move_to(target_vc)
-                                last_voice_activity[activity_id] = time.time()
+                #         if voice_client and voice_client.is_connected():
+                #             if voice_client.channel != target_vc:
+                #                 await voice_client.move_to(target_vc)
+                #                 last_voice_activity[activity_id] = time.time()
                                 
-                        else:
-                            voice_client = await target_vc.connect()
-                            last_voice_activity[activity_id] = time.time()
+                #         else:
+                #             voice_client = await target_vc.connect()
+                #             last_voice_activity[activity_id] = time.time()
                             
-                        if voice_client.is_playing():
-                            voice_client.stop()
+                #         if voice_client.is_playing():
+                #             voice_client.stop()
 
                 # Send the text reply
                 if message.channel.type == discord.ChannelType.private:
                     await message.channel.send(content=response)
+                    
                 else:
                     await message.reply(content=response, mention_author=False)
 
-                # The user has their answer now — never requeue combined_prompt past this
-                # point, and persist history regardless of what happens with voice below.
                 responded = True
 
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
@@ -447,15 +484,15 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 await asyncio.to_thread(save_history, serverData)
 
                 # Voice playback is best-effort from here — failures shouldn't undo the above
-                if voice_client and has_audio:
-                    if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
-                        audio_source = discord.FFmpegPCMAudio(audio_path)
-                        voice_client.play(audio_source)
+                # if voice_client and has_audio:
+                #     if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
+                #         audio_source = discord.FFmpegPCMAudio(audio_path)
+                #         voice_client.play(audio_source)
 
-                        activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
-                        last_voice_activity[activity_id] = time.time()
-                    else:
-                        logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
+                #         activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
+                #         last_voice_activity[activity_id] = time.time()
+                #     else:
+                #         logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
 
             except APIConnectionError as e:
                 logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
@@ -463,8 +500,6 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 logging.error(f"\nError generating AI response or handling audio: {e}")
 
     except asyncio.CancelledError:
-        # Don't drop the user's text if we're cancelled before answering — requeue it so
-        # the next debounced run picks it up.
         if not responded and combined_prompt and session_key in active_sessions:
             active_sessions[session_key]['buffer'].insert(0, combined_prompt)
 
@@ -473,11 +508,6 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
             active_sessions[session_key]['task'] = None
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
-
-def normalize_command(raw: str) -> str:
-    parts = raw.split(" ", 1)
-    parts[0] = parts[0].lower()
-    return " ".join(parts)
 
 async def terminal_listener():
     await client.wait_until_ready()
@@ -578,6 +608,11 @@ async def speak_ai_response(session_key, user_id, voice_client):
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
 
+
+# -----------------------------
+#     Response Generation
+# -----------------------------
+
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
     # Get and validate model
     if not bot_config["is_localhost"]:
@@ -640,6 +675,11 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         messages=messages,
     )
     return chatCompletion
+
+
+# -----------------------------
+#       Discord Events
+# -----------------------------
 
 @client.event
 async def on_ready(): 
@@ -772,6 +812,9 @@ async def on_message(message):
         else:
             return
 
+# -----------------------------
+#         Misc. Start
+# -----------------------------
 AIprompt.instructionsDict = src.data.sheetsapi.main()
 
 kokoro = Kokoro(model_path, voices_path)
