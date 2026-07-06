@@ -18,7 +18,7 @@ def load_config():
     else:
         saved_settings = {}
 
-    merged = {**CONFIG_FILE, **saved_settings}
+    merged = {**defaults, **saved_settings}
 
     if merged != saved_settings:
         save_config(merged)

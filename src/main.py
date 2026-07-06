@@ -1,4 +1,5 @@
 import sys
+import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 if root_dir not in sys.path:
@@ -8,7 +9,6 @@ import re
 import random as rand
 import asyncio
 import time
-import os
 
 import logging
 logging.basicConfig(
@@ -19,7 +19,6 @@ logging.basicConfig(
 
 import discord # pip install discord.py-self[voice]
 from discord.ext import commands
-import discord.ext.voice_recv as voice_recv
 
 # from groq import AsyncGroq # pip install groq
 from openai import AsyncOpenAI, APIConnectionError # pip install openai
