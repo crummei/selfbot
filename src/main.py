@@ -1,14 +1,14 @@
-import re
-import random as rand
-import asyncio
-import time
-import os
-
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
+
+import re
+import random as rand
+import asyncio
+import time
+import os
 
 import logging
 logging.basicConfig(
@@ -37,6 +37,8 @@ voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 from src.config import load_config, save_config
 bot_config = load_config()
 account_lists = bot_config.get("account_lists", {})
+is_localhost = bot_config.get("is_localhost", False)
+TTS_enabled = bot_config.get("TTS_enabled", False)
 
 from dotenv import load_dotenv # python-dotenv
 load_dotenv(ENV_PATH)
@@ -178,7 +180,7 @@ async def process_admin_commands(command):
             parts = command.split(" ", 1)
             
             if command.strip() == "model":
-                if not bot_config["is_localhost"]:
+                if not is_localhost:
                     current_model = bot_config.get("API_model")
                     return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 else:
@@ -187,7 +189,7 @@ async def process_admin_commands(command):
                 
             elif len(parts) > 1 and parts[1].strip() != "":
                 
-                if not bot_config["is_localhost"]:
+                if not is_localhost:
                     
                     bot_config["API_model"] = parts[1].strip()
                     save_config(bot_config)
@@ -323,7 +325,7 @@ async def process_admin_commands(command):
         try:
             parts = command.split(" ", 3)
             
-            if len(parts) > 2 and parts[1].strip() == "delete" and parts[2].strip() != "":
+            if len(parts) > 2 and parts[1].strip() in ["delete", "clear"] and parts[2].strip() != "":
                 target = parts[2].strip()
                 
                 if target == "all":
@@ -364,7 +366,7 @@ async def process_admin_commands(command):
             parts = command.split(" ", 1)
             
             if command.strip() == "localhost":
-                if bot_config.get("is_localhost", {}):
+                if bot_config["is_localhost"]:
                     return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
                 else:
                     return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
@@ -386,12 +388,46 @@ async def process_admin_commands(command):
                     return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
                 
                 else:
-                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost <True/False>"
+                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost *<True/False>"
                 
             else:
-                return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
+                return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
         except (KeyError, ValueError):
-            return logging.WARNING, "\n❌ Please provide a model name. Usage: model <model_name>"
+            return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
+    
+    elif command.startswith("tts"):
+        try:
+            parts = command.split(" ", 1)
+            
+            if command.strip() == "tts":
+                if bot_config["TTS_enabled"]:
+                    return logging.INFO, f"\n📋 TTS is currently ON"
+                else:
+                    return logging.INFO, f"\n📋 TTS is currently OFF"
+                
+            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
+                
+                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
+                    
+                    bot_config["TTS_enabled"] = True
+                    save_config(TTS_enabled)
+                    
+                    return logging.INFO, f"\n✅ TTS has been enabled"
+                
+                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
+                
+                    bot_config["TTS_enabled"] = False
+                    save_config(bot_config)
+                    
+                    return logging.INFO, f"\n✅ TTS has been disabled"
+                
+                else:
+                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
+                
+            else:
+                return logging.WARNING, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
+        except (KeyError, ValueError):
+            return logging.WARNING, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
         
     elif command != "":
         return logging.WARNING, f"\n🤨 Unknown command: {command}"
@@ -423,51 +459,52 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
+                
+                if TTS_enabled:
+                    clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
-                # clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
+                    has_audio = False
+                    voice_client = None
+                    target_vc = None
+                    audio_path = None
 
-                # has_audio = False
-                # voice_client = None
-                # target_vc = None
-                # audio_path = None
+                    if clean_text:
+                        # Per-session file so concurrent generations never clobber each other
+                        safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
+                        audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
 
-                # if clean_text:
-                #     # Per-session file so concurrent generations never clobber each other
-                #     safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
-                #     audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
+                        def _make_audio():
+                            samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
+                            sf.write(audio_path, samples, sample_rate)
 
-                #     def _make_audio():
-                #         samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
-                #         sf.write(audio_path, samples, sample_rate)
+                        await asyncio.to_thread(_make_audio)
+                        has_audio = True
 
-                #     await asyncio.to_thread(_make_audio)
-                #     has_audio = True
+                    if has_audio:
+                        target_vc = await get_user_voice_channel(client, int(user_id), message)
 
-                # if has_audio:
-                #     target_vc = await get_user_voice_channel(client, int(user_id), message)
+                        if target_vc:
+                            is_server = hasattr(target_vc, 'guild') and target_vc.guild
 
-                #     if target_vc:
-                #         is_server = hasattr(target_vc, 'guild') and target_vc.guild
-
-                #         if is_server:
-                #             voice_client = target_vc.guild.voice_client
-                #             activity_id = target_vc.guild.id
-                            
-                #         else:
-                #             voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
-                #             activity_id = target_vc.id
-
-                #         if voice_client and voice_client.is_connected():
-                #             if voice_client.channel != target_vc:
-                #                 await voice_client.move_to(target_vc)
-                #                 last_voice_activity[activity_id] = time.time()
+                            if is_server:
+                                voice_client = target_vc.guild.voice_client
+                                activity_id = target_vc.guild.id
                                 
-                #         else:
-                #             voice_client = await target_vc.connect()
-                #             last_voice_activity[activity_id] = time.time()
-                            
-                #         if voice_client.is_playing():
-                #             voice_client.stop()
+                            else:
+                                voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
+                                activity_id = target_vc.id
+
+                            if voice_client and voice_client.is_connected():
+                                if voice_client.channel != target_vc:
+                                    await voice_client.move_to(target_vc)
+                                    last_voice_activity[activity_id] = time.time()
+                                    
+                            else:
+                                voice_client = await target_vc.connect()
+                                last_voice_activity[activity_id] = time.time()
+                                
+                            if voice_client.is_playing():
+                                voice_client.stop()
 
                 # Send the text reply
                 if message.channel.type == discord.ChannelType.private:
@@ -482,20 +519,22 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 allPrompts.append(combined_prompt)
                 allResponses.append(response)
                 await asyncio.to_thread(save_history, serverData)
+                if TTS_enabled:
+                    # Voice playback is best-effort from here — failures shouldn't undo the above
+                    if voice_client and has_audio:
+                        if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
+                            audio_source = discord.FFmpegPCMAudio(audio_path)
+                            voice_client.play(audio_source)
 
-                # Voice playback is best-effort from here — failures shouldn't undo the above
-                # if voice_client and has_audio:
-                #     if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
-                #         audio_source = discord.FFmpegPCMAudio(audio_path)
-                #         voice_client.play(audio_source)
-
-                #         activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
-                #         last_voice_activity[activity_id] = time.time()
-                #     else:
-                #         logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
+                            activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
+                            last_voice_activity[activity_id] = time.time()
+                            
+                        else:
+                            logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
 
             except APIConnectionError as e:
                 logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
+                
             except Exception as e:
                 logging.error(f"\nError generating AI response or handling audio: {e}")
 
@@ -506,6 +545,7 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
     finally:
         if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
             active_sessions[session_key]['task'] = None
+            
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
 
@@ -541,6 +581,7 @@ async def terminal_listener():
                 
         except asyncio.CancelledError:
             break
+        
         except Exception as e:
             logging.error(f"\n❗ Terminal listener error: {e}")
 
@@ -595,6 +636,7 @@ async def speak_ai_response(session_key, user_id, voice_client):
 
         except APIConnectionError as e:
             logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
+            
         except Exception as e:
             logging.error(f"\nError generating voice AI response: {e}")
 
@@ -605,6 +647,7 @@ async def speak_ai_response(session_key, user_id, voice_client):
     finally:
         if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
             active_sessions[session_key]['task'] = None
+            
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
 
@@ -615,8 +658,9 @@ async def speak_ai_response(session_key, user_id, voice_client):
 
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
     # Get and validate model
-    if not bot_config["is_localhost"]:
+    if not is_localhost:
         AIprompt.model = bot_config.get("API_model")
+        
         if not AIprompt.model:
             raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
             
@@ -627,6 +671,7 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         
     else:
         AIprompt.model = bot_config.get("local_model")
+        
         if not AIprompt.model:
             raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
         
