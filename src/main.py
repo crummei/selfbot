@@ -665,7 +665,7 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
 
     messages.append({
         'role': 'user',
-        'content': f"User Input:\"\"\"\n\n{user_message}\n\"\"\""
+        'content': user_message
     })
     
     # Start chatCompletion
