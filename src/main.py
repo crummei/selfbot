@@ -658,7 +658,7 @@ async def speak_ai_response(session_key, user_id, voice_client):
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
     # Get and validate model
     if not is_localhost:
-        AIprompt.model = bot_config.get("API_model")
+        AIprompt.model = bot_config.get("API_model", None)
         
         if not AIprompt.model:
             raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
@@ -669,7 +669,7 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         )
         
     else:
-        AIprompt.model = bot_config.get("local_model")
+        AIprompt.model = bot_config.get("local_model", None)
         
         if not AIprompt.model:
             raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
