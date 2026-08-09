@@ -173,6 +173,7 @@ async def process_admin_commands(command):
             
     #     else:
     #         return logging.WARNING, "\n⚡ Bot is already running..."
+        
     if command.startswith("help"):
         try:
             parts = command.split(" ", 1)
@@ -216,7 +217,7 @@ async def process_admin_commands(command):
         except Exception as e:
             return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
     
-    elif command.startswith("model"):
+    if command.startswith("model"):
         try:
             parts = command.split(" ", 1)
             
@@ -434,7 +435,7 @@ async def process_admin_commands(command):
             else:
                 return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
         except (KeyError, ValueError):
-            return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
+            return logging.WARNING, "\n❌ Please provide all arguments.  "
     
     elif command.startswith("tts"):
         try:
@@ -473,7 +474,7 @@ async def process_admin_commands(command):
     elif command != "":
         return logging.WARNING, f"\n🤨 Unknown command: {command}"
 
-async def process_combined_messages(session_key, user_id, message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
+async def process_combined_messages(session_key, user_id, message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
     combined_prompt = None
     responded = False
     
@@ -482,35 +483,64 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
         minDelay = rand.randint(800, 3000)/1000
         typingDelay = max(rand.randint(totalDelay*100, totalDelay*800)/1000, minDelay)
         
-        # await asyncio.sleep(totalDelay-typingDelay)
-        
         # Human typing delay
         async with message.channel.typing():
             await asyncio.sleep(typingDelay)
         
-        # Timer finished. Combine buffer
-    
         session = active_sessions[session_key]
         combined_prompt = "\n".join(session['buffer'])
         session['buffer'] = []
 
-        response = None
+        response = ""
+        reply_msg = None
+        last_update_time = time.time()
+        update_interval = 1.0 # Edit Discord message every 1.0 seconds to avoid rate limits
+
         async with message.channel.typing():
             try:
-                chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
-                response = chatCompletion.choices[0].message.content
-                response = re.sub(r"<think>.*?</think>\s*", '', response, flags=re.DOTALL).strip()
+                # -----------------------------
+                #       Streaming Loop
+                # -----------------------------
+                stream = AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
                 
+                async for chunk in stream:
+                    response += chunk
+                    
+                    # Send the initial message once we have a tiny bit of text
+                    if reply_msg is None and len(response) > 5:
+                        if message.channel.type == discord.ChannelType.private:
+                            reply_msg = await message.channel.send(content=response)
+                        else:
+                            reply_msg = await message.reply(content=response, mention_author=False)
+                        last_update_time = time.time()
+                        
+                    # Periodically edit the message to show new streamed tokens
+                    elif reply_msg is not None and (time.time() - last_update_time) > update_interval:
+                        await reply_msg.edit(content=response)
+                        last_update_time = time.time()
+                
+                # Stream finished! Do one final edit/send to ensure the last tokens are displayed
+                if reply_msg is None:
+                    if message.channel.type == discord.ChannelType.private:
+                        await message.channel.send(content=response)
+                    else:
+                        await message.reply(content=response, mention_author=False)
+                else:
+                    await reply_msg.edit(content=response)
+                
+                responded = True
+
+                # -----------------------------
+                #       TTS and saving
+                # -----------------------------
                 if TTS_enabled:
                     clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
-
                     has_audio = False
                     voice_client = None
                     target_vc = None
                     audio_path = None
 
                     if clean_text:
-                        # Per-session file so concurrent generations never clobber each other
                         safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
                         audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
 
@@ -523,14 +553,12 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
 
                     if has_audio:
                         target_vc = await get_user_voice_channel(client, int(user_id), message)
-
                         if target_vc:
                             is_server = hasattr(target_vc, 'guild') and target_vc.guild
 
                             if is_server:
                                 voice_client = target_vc.guild.voice_client
                                 activity_id = target_vc.guild.id
-                                
                             else:
                                 voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
                                 activity_id = target_vc.id
@@ -539,7 +567,6 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                                 if voice_client.channel != target_vc:
                                     await voice_client.move_to(target_vc)
                                     last_voice_activity[activity_id] = time.time()
-                                    
                             else:
                                 voice_client = await target_vc.connect()
                                 last_voice_activity[activity_id] = time.time()
@@ -547,29 +574,18 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                             if voice_client.is_playing():
                                 voice_client.stop()
 
-                # Send the text reply
-                if message.channel.type == discord.ChannelType.private:
-                    await message.channel.send(content=response)
-                    
-                else:
-                    await message.reply(content=response, mention_author=False)
-
-                responded = True
-
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
                 allPrompts.append(combined_prompt)
                 allResponses.append(response)
                 await asyncio.to_thread(save_history, serverData)
+                
                 if TTS_enabled:
-                    # Voice playback is best-effort from here — failures shouldn't undo the above
                     if voice_client and has_audio:
                         if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
                             audio_source = discord.FFmpegPCMAudio(audio_path)
                             voice_client.play(audio_source)
-
                             activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
                             last_voice_activity[activity_id] = time.time()
-                            
                         else:
                             logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
 
@@ -586,7 +602,6 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
     finally:
         if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
             active_sessions[session_key]['task'] = None
-            
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
 
@@ -635,17 +650,20 @@ async def speak_ai_response(session_key, user_id, voice_client):
         combined_prompt = "\n".join(session['buffer'])
         session['buffer'] = []
 
-        # Voice sessions get their own ephemeral history for now, separate from
-        # DM/server text history — say if you'd rather they share one thread.
         if session_key not in serverData.setdefault("voice", {}):
             serverData["voice"][session_key] = {'allPrompts': [], 'allResponses': []}
         allPrompts = serverData["voice"][session_key]['allPrompts']
         allResponses = serverData["voice"][session_key]['allResponses']
 
         try:
-            chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses)
-            response = chatCompletion.choices[0].message.content
-            response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
+            # -----------------------------
+            # THE NEW STREAMING LOOP
+            # -----------------------------
+            response = ""
+            async for chunk in AIprompt(combined_prompt, allPrompts, allResponses):
+                response += chunk
+            
+            # Since AIprompt now filters <think> tags natively, we just clean characters
             clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
             if not clean_text:
@@ -697,7 +715,7 @@ async def speak_ai_response(session_key, user_id, voice_client):
 #     Response Generation
 # -----------------------------
 
-async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
+async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
     # Get and validate model
     if not is_localhost:
         AIprompt.model = bot_config.get("API_model", None)
@@ -754,13 +772,42 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         'content': user_message
     })
     
-    # Start chatCompletion
-    chatCompletion = await chatClient.chat.completions.create(
+    # Start chatCompletion with STREAMING ENABLED
+    response_stream = await chatClient.chat.completions.create(
         model=AIprompt.model,
         temperature=1.3,
         messages=messages,
+        stream=True,
     )
-    return chatCompletion
+    
+    # The Streaming & Filtering State Machine
+    is_thinking = True
+    buffer = ""
+
+    async for chunk in response_stream:
+        delta = chunk.choices[0].delta.content
+        if not delta:
+            continue
+            
+        if is_thinking:
+            buffer += delta
+            if "</think>" in buffer:
+                # End of thinking has been detected
+                _, clean_text = buffer.split("</think>", 1)
+                clean_text = clean_text.lstrip()
+                
+                if clean_text:
+                    yield clean_text
+                
+                is_thinking = False
+            # If it has no brain (doesn't think)
+            elif len(buffer) > 20 and "<think>" not in buffer:
+                yield buffer
+                is_thinking = False
+                
+        else:
+            # Thought process is over
+            yield delta
 
 
 # -----------------------------
