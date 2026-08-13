@@ -8,7 +8,7 @@ defaults = {
     "account_lists": {},
     "is_localhost": False,
     "TTS_enabled": False,
-    "streaming_update_interval": 1.2,
+    "delay_per_word": 0.1,
     "human_delay_min": 1.5,
     "human_delay_max": 4.0,
     "human_wpm": 150

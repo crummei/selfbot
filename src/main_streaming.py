@@ -52,6 +52,10 @@ load_dotenv(ENV_PATH)
 active_sessions = {}
 last_voice_activity = {}
 
+# Global API Clients to reuse connections
+_api_client = None
+_local_client = None
+
 client = commands.Bot(
     command_prefix='',
     self_bot=False
@@ -65,6 +69,12 @@ async def get_user_voice_channel(client: discord.Client, target_uid: int, messag
     # Check if the message was sent in a groupchat
     if message and isinstance(message.channel, discord.GroupChannel):
         return message.channel
+        
+    # Prioritize the guild where the message was sent
+    if message and getattr(message, 'guild', None):
+        member = message.guild.get_member(target_uid)
+        if member and member.voice and member.voice.channel:
+            return member.voice.channel
 
     # Iterate through all guilds
     for guild in client.guilds:
@@ -133,13 +143,13 @@ async def wait_for_user_in_vc(target_vc, user_id: int, timeout: float = 60, poll
 
     return is_user_in_vc(target_vc, user_id)
 
-async def is_user_in_dict(target_id, data_dict = account_lists):
+def is_user_in_dict(target_id, data_dict = account_lists):
     for key, value in data_dict.items():
         if key == 'USER_ID' and value == target_id:
             return True
         
         elif isinstance(value, dict):
-            if await is_user_in_dict(target_id, value):
+            if is_user_in_dict(target_id, value):
                 return True
             
     return False
@@ -190,7 +200,7 @@ async def process_admin_commands(command):
 > - tts | Check current status or Enable/Disable joining VC and speaking the response | Usage: tts *<True/False>
 """
 
-        #     elif len(parts) > 1 and parts[1].strip() != "":
+            #     elif len(parts) > 1 and parts[1].strip() != "":
                 
         #         if not is_localhost:
                     
@@ -218,9 +228,10 @@ async def process_admin_commands(command):
     if command.startswith("model"):
         try:
             parts = command.split(" ", 1)
+            is_localhost = bot_config.get("is_localhost")
             
             if command.strip() == "model":
-                if not bot_config.get("is_localhost"):
+                if not is_localhost:
                     current_model = bot_config.get("API_model")
                     return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 else:
@@ -228,17 +239,17 @@ async def process_admin_commands(command):
                     return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 
             elif len(parts) > 1 and parts[1].strip() != "":
-                if not bot_config.get("is_localhost"):
+                if not is_localhost:
                     
                     bot_config["API_model"] = parts[1].strip()
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                 
                     return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
                 
                 else:
                     
                     bot_config["local_model"] = parts[1].strip()
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                 
                     return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
                 
@@ -303,7 +314,7 @@ async def process_admin_commands(command):
                             
                             if "instructions" in bot_config and 0 <= index_to_remove < len(bot_config["instructions"]):
                                 removed_value = bot_config["instructions"].pop(index_to_remove)
-                                save_config(bot_config)
+                                await asyncio.to_thread(save_config, bot_config)
                                 return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
                             else:
                                 return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
@@ -325,7 +336,7 @@ async def process_admin_commands(command):
                             
                         new_instruction = parts[2].strip()
                         bot_config["instructions"].append(new_instruction)
-                        save_config(bot_config)
+                        await asyncio.to_thread(save_config, bot_config)
                         
                         new_position = len(bot_config["instructions"])
                         return logging.INFO, f"\n✅ Added new instruction at Pos. {new_position}: \"{new_instruction}\""
@@ -340,7 +351,7 @@ async def process_admin_commands(command):
                         
                         if "instructions" in bot_config and 0 <= index_to_replace < len(bot_config["instructions"]):
                             bot_config["instructions"][index_to_replace] = parts[2].strip()
-                            save_config(bot_config)
+                            await asyncio.to_thread(save_config, bot_config)
                             return logging.INFO, f"\n✅ Switched instruction {action} to: \"{parts[2].strip()}\""
                         else:
                             return logging.WARNING, f"\n❌ No instruction exists in position: {action}"
@@ -370,7 +381,7 @@ async def process_admin_commands(command):
                 if target == "all":
                     serverData["user"].clear()
                     serverData["server"].clear()
-                    save_history(serverData)
+                    await asyncio.to_thread(save_history, serverData)
                     
                     return logging.INFO, f"\n✅ Cleared all history!"
                 
@@ -378,7 +389,7 @@ async def process_admin_commands(command):
                     ID = parts[3].strip()
                     
                     if serverData[target].pop(ID, None):
-                        save_history(serverData)
+                        await asyncio.to_thread(save_history, serverData)
                     
                         return logging.INFO, f"\n✅ Cleared history for {target}: \"{ID}\""
                     
@@ -416,11 +427,11 @@ async def process_admin_commands(command):
 
             if arg in BOOLEAN_TRUE:
                     bot_config["is_localhost"] = True
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                     return logging.INFO, f"\n✅ Now using localhost LLM"
             elif arg in BOOLEAN_FALSE:
                     bot_config["is_localhost"] = False
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                     return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
             else:
                 return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
@@ -440,11 +451,11 @@ async def process_admin_commands(command):
 
             if arg in BOOLEAN_TRUE:
                     bot_config["TTS_enabled"] = True
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                     return logging.INFO, f"\n✅ TTS has been enabled"
             elif arg in BOOLEAN_FALSE:
                     bot_config["TTS_enabled"] = False
-                    save_config(bot_config)
+                    await asyncio.to_thread(save_config, bot_config)
                     return logging.INFO, f"\n✅ TTS has been disabled"
 
             else:
@@ -462,12 +473,18 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
     try:
         session = active_sessions[session_key]
         combined_prompt = "\n".join(session['buffer'])
+        if not combined_prompt:
+            return
         session['buffer'] = []
 
         # 1. Simulate human "reading" and "thinking" delay
-        min_delay = bot_config.get("human_delay_min", 1.5)
-        max_delay = bot_config.get("human_delay_max", 4.0)
-        await asyncio.sleep(rand.uniform(min_delay, max_delay))
+        words_in_message = len(message.content.split())
+        reading_time = (words_in_message / bot_config.get("human_wpm", 150)) * 60
+        thinking_time = words_in_message * bot_config.get("delay_per_word", 0.1)
+
+        # Use the longer of the two, and add a small random hesitation.
+        total_delay = max(reading_time, thinking_time) + rand.uniform(0.1, 0.5)
+        await asyncio.sleep(total_delay)
 
         # 2. Generate the full response in the background
         response = ""
@@ -498,12 +515,19 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
         if message.channel.type == discord.ChannelType.private:
             await message.channel.send(content=response)
         else:
-            await message.reply(content=response, mention_author=False)
+            await message.reply(content=response, mention_author=True)
         
         responded = True
         logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
         allPrompts.append(combined_prompt)
         allResponses.append(response)
+        
+        # Cap history to prevent memory leaks
+        MAX_HISTORY = 50
+        if len(allPrompts) > MAX_HISTORY:
+            allPrompts[:] = allPrompts[-MAX_HISTORY:]
+            allResponses[:] = allResponses[-MAX_HISTORY:]
+            
         await asyncio.to_thread(save_history, serverData)
 
         # 5. Handle TTS after the text response is sent
@@ -602,93 +626,28 @@ async def terminal_listener():
         except Exception as e:
             logging.error(f"\n❗ Terminal listener error: {e}")
 
-async def speak_ai_response(session_key, user_id, voice_client):
-    combined_prompt = None
-    responded = False
-
-    try:
-        session = active_sessions[session_key]
-        combined_prompt = "\n".join(session['buffer'])
-        session['buffer'] = []
-
-        if session_key not in serverData.setdefault("voice", {}):
-            serverData["voice"][session_key] = {'allPrompts': [], 'allResponses': []}
-        allPrompts = serverData["voice"][session_key]['allPrompts']
-        allResponses = serverData["voice"][session_key]['allResponses']
-
-        try:
-            # -----------------------------
-            # THE NEW STREAMING LOOP
-            # -----------------------------
-            response = ""
-            stream = AIprompt(combined_prompt, allPrompts, allResponses)
-            async for chunk in stream:
-                response += chunk
-            
-            # AIprompt filters <think> tags, so we just clean remaining characters
-            clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
-
-            if not clean_text:
-                responded = True
-                return
-
-            safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
-            audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
-
-            def _make_audio():
-                samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
-                sf.write(audio_path, samples, sample_rate)
-
-            await asyncio.to_thread(_make_audio)
-
-            responded = True
-            logging.info(f"\n==========================\nVoice User:\n{combined_prompt}\n\nResponse: {response}\n==========================")
-            allPrompts.append(combined_prompt)
-            allResponses.append(response)
-            await asyncio.to_thread(save_history, serverData)
-
-            if voice_client.is_playing():
-                voice_client.stop()
-
-            voice_client.play(discord.FFmpegPCMAudio(audio_path))
-
-            activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
-            last_voice_activity[activity_id] = time.time()
-
-        except APIConnectionError as e:
-            logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
-            
-        except Exception as e:
-            logging.error(f"\nError generating voice AI response: {e}")
-
-    except asyncio.CancelledError:
-        if not responded and combined_prompt and session_key in active_sessions:
-            active_sessions[session_key]['buffer'].insert(0, combined_prompt)
-
-    finally:
-        if session_key in active_sessions and active_sessions[session_key]['task'] == asyncio.current_task():
-            active_sessions[session_key]['task'] = None
-            
-            if not active_sessions[session_key]['buffer']:
-                del active_sessions[session_key]
-
 
 # -----------------------------
 #     Response Generation
 # -----------------------------
 
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
+    is_localhost = bot_config.get("is_localhost")
+    global _api_client, _local_client
+
     # Get and validate model
-    if not bot_config.get("is_localhost"):
+    if not is_localhost:
         AIprompt.model = bot_config.get("API_model", None)
         
         if not AIprompt.model:
             raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
             
-        chatClient = AsyncOpenAI(
-            base_url=os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1"),
-            api_key=os.environ.get("GROQ_API_KEY")
-        )
+        if _api_client is None:
+            _api_client = AsyncOpenAI(
+                base_url=os.environ.get("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
+                api_key=os.environ.get("GROQ_API_KEY")
+            )
+        chatClient = _api_client
         
     else:
         AIprompt.model = bot_config.get("local_model", None)
@@ -696,12 +655,13 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False
         if not AIprompt.model:
             raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
         
-        local_ip = os.environ.get("LM_STUDIO_IP", "127.0.0.1")
-
-        chatClient = AsyncOpenAI(
-            base_url=f"http://{local_ip}:1234/v1",
-            api_key="lm-studio"
-        )
+        if _local_client is None:
+            local_ip = os.environ.get("LM_STUDIO_IP", "127.0.0.1")
+            _local_client = AsyncOpenAI(
+                base_url=f"http://{local_ip}:1234/v1",
+                api_key="lm-studio"
+            )
+        chatClient = _local_client
     
     # Build full prompt
     messages = []
@@ -742,34 +702,34 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False
         stream=True,
     )
     
-    # The Streaming & Filtering State Machine
-    is_thinking = True
+    in_think_tag = False
+    is_thinking = True 
     buffer = ""
 
     async for chunk in response_stream:
         delta = chunk.choices[0].delta.content
         if not delta:
             continue
-            
+        buffer += delta
+
         if is_thinking:
-            buffer += delta
+            if not in_think_tag and "<think>" in buffer:
+                in_think_tag = True
+
             if "</think>" in buffer:
-                # End of thinking has been detected
                 _, clean_text = buffer.split("</think>", 1)
                 clean_text = clean_text.lstrip()
-                
                 if clean_text:
                     yield clean_text
-                
+                buffer = buffer.split("</think>", 1)[1]
                 is_thinking = False
-            # If it has no brain (doesn't think)
-            elif len(buffer) > 20 and "<think>" not in buffer:
+            elif not in_think_tag and len(buffer) > 1:
+                is_thinking = False
+
+        if not is_thinking:
+            if buffer:
                 yield buffer
-                is_thinking = False
-                
-        else:
-            # Thought process is over
-            yield delta
+                buffer = ""
 
 
 # -----------------------------
@@ -793,7 +753,7 @@ async def on_message(message):
     if str(user_message).startswith("."):
         return
     
-    if str(user_message).startswith("*") and await is_user_in_dict(message.author.id):
+    if str(user_message).startswith("*") and is_user_in_dict(message.author.id):
         log_level, log_message = await process_admin_commands(normalize_command(user_message.lstrip('*')))
         await message.channel.send(log_message)
         return
