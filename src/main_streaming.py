@@ -593,7 +593,7 @@ async def handle_tts_playback(session_key, user_id, message, text_response):
 async def terminal_listener():
     await client.wait_until_ready()
     
-    while client.is_ready():
+    while not client.is_closed():
         try:
             user_input = await asyncio.to_thread(input)
             command = normalize_command(user_input.strip())
@@ -718,10 +718,7 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False
 
             if "</think>" in buffer:
                 _, clean_text = buffer.split("</think>", 1)
-                clean_text = clean_text.lstrip()
-                if clean_text:
-                    yield clean_text
-                buffer = buffer.split("</think>", 1)[1]
+                buffer = clean_text.lstrip()
                 is_thinking = False
             elif not in_think_tag and len(buffer) > 1:
                 is_thinking = False
@@ -778,94 +775,92 @@ async def on_message(message):
         else:
             return
     
-    else:
-        
-        # =========================
-        #   Direct Messages (DMs)
-        # =========================
-        if message.guild is None:
-            # Check for mentions
-            if message.mentions and not is_reply_to_bot:
-                user = str(message.raw_mentions).strip('[]')
-                mention_text = " ".join(f"<@{uid}>" for uid in message.raw_mentions)
-                await message.channel.send(mention_text)
-                return
-            
-            userID = str(message.author.id)
-            session_key = f"dm:{userID}"
-            
-            # Initialize DM data if it doesn't exist
-            if userID not in serverData["user"]:
-                logging.info(f"\nInitializing data for {userID}")
-                serverData["user"][userID] = {
-                    'allPrompts': [],
-                    'allResponses': [],
-                }
-
-            # Retrieve prompts and responses for the user
-            allPrompts = serverData["user"][userID]['allPrompts']
-            allResponses = serverData["user"][userID]['allResponses']
-            
-            # Initialize Active Session Data (The Buffer)
-            if session_key not in active_sessions:
-                active_sessions[session_key] = {'buffer': [], 'task': None}
-                
-            session = active_sessions[session_key]
-            
-            # Add the new message to the buffer
-            session['buffer'].append(user_message)
-            
-            # Cancel the existing task if it's currently waiting or generating
-            if session['task'] and not session['task'].done():
-                session['task'].cancel()
-                
-            # 6. Create a fresh task with the new buffer
-            session['task'] = asyncio.create_task(
-                process_combined_messages(session_key, userID, message, allPrompts, allResponses, is_reply_to_bot, reference_msg)
-            )
-                
-        # Don't remove, disabling is only temporary
-        # ===================
-        #   Server Messages
-        # ===================
-        elif message.channel.id in [1521638071836086422]:
-            if message.mentions and not is_reply_to_bot:
-                user = str(message.raw_mentions).strip('[]')
-                await message.channel.send(f"<@{user}>")
-                return
-            
-            guildID = str(message.guild.id)
-            userID = str(message.author.id)
-            session_key = f"server:{guildID}:{userID}"
-            
-            if session_key not in serverData["server"]:
-                logging.info(f"Initializing data for server {session_key}")
-                serverData["server"][session_key] = {
-                    'allPrompts': [],
-                    'allResponses': []
-                }
-
-            serverPrompts = serverData["server"][session_key]['allPrompts']
-            serverResponses = serverData["server"][session_key]['allResponses']
-            
-            if session_key not in active_sessions:
-                active_sessions[session_key] = {'buffer': [], 'task': None}
-                
-            session = active_sessions[session_key]
-            
-            # Add the new message to the buffer
-            session['buffer'].append(user_message)
-            
-            # Cancel the existing task if it's currently waiting or generating½
-            if session['task'] and not session['task'].done():
-                session['task'].cancel()
-                
-            # Create a fresh task with the new buffer, passing SERVER history instead of DM history
-            session['task'] = asyncio.create_task(
-                process_combined_messages(session_key, userID, message, serverPrompts, serverResponses, is_reply_to_bot, reference_msg)
-            )
-        else:
+    # =========================
+    #   Direct Messages (DMs)
+    # =========================
+    if message.guild is None:
+        # Check for mentions
+        if message.mentions and not is_reply_to_bot:
+            user = str(message.raw_mentions).strip('[]')
+            mention_text = " ".join(f"<@{uid}>" for uid in message.raw_mentions)
+            await message.channel.send(mention_text)
             return
+        
+        userID = str(message.author.id)
+        session_key = f"dm:{userID}"
+        
+        # Initialize DM data if it doesn't exist
+        if userID not in serverData["user"]:
+            logging.info(f"\nInitializing data for {userID}")
+            serverData["user"][userID] = {
+                'allPrompts': [],
+                'allResponses': [],
+            }
+
+        # Retrieve prompts and responses for the user
+        allPrompts = serverData["user"][userID]['allPrompts']
+        allResponses = serverData["user"][userID]['allResponses']
+        
+        # Initialize Active Session Data (The Buffer)
+        if session_key not in active_sessions:
+            active_sessions[session_key] = {'buffer': [], 'task': None}
+            
+        session = active_sessions[session_key]
+        
+        # Add the new message to the buffer
+        session['buffer'].append(user_message)
+        
+        # Cancel the existing task if it's currently waiting or generating
+        if session['task'] and not session['task'].done():
+            session['task'].cancel()
+            
+        # 6. Create a fresh task with the new buffer
+        session['task'] = asyncio.create_task(
+            process_combined_messages(session_key, userID, message, allPrompts, allResponses, is_reply_to_bot, reference_msg)
+        )
+            
+    # Don't remove, disabling is only temporary
+    # ===================
+    #   Server Messages
+    # ===================
+    elif message.channel.id in [1521638071836086422]:
+        if message.mentions and not is_reply_to_bot:
+            mention_text = " ".join(f"<@{uid}>" for uid in message.raw_mentions)
+            await message.channel.send(mention_text)
+            return
+        
+        guildID = str(message.guild.id)
+        userID = str(message.author.id)
+        session_key = f"server:{guildID}:{userID}"
+        
+        if session_key not in serverData["server"]:
+            logging.info(f"Initializing data for server {session_key}")
+            serverData["server"][session_key] = {
+                'allPrompts': [],
+                'allResponses': []
+            }
+
+        serverPrompts = serverData["server"][session_key]['allPrompts']
+        serverResponses = serverData["server"][session_key]['allResponses']
+        
+        if session_key not in active_sessions:
+            active_sessions[session_key] = {'buffer': [], 'task': None}
+            
+        session = active_sessions[session_key]
+        
+        # Add the new message to the buffer
+        session['buffer'].append(user_message)
+        
+        # Cancel the existing task if it's currently waiting or generating
+        if session['task'] and not session['task'].done():
+            session['task'].cancel()
+            
+        # Create a fresh task with the new buffer, passing SERVER history instead of DM history
+        session['task'] = asyncio.create_task(
+            process_combined_messages(session_key, userID, message, serverPrompts, serverResponses, is_reply_to_bot, reference_msg)
+        )
+    else:
+        return
 
 # -----------------------------
 #         Misc. Start
