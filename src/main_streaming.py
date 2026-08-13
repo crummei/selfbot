@@ -36,8 +36,6 @@ voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 from src.config import load_config, save_config
 bot_config = load_config()
 account_lists = bot_config.get("account_lists", {})
-is_localhost = bot_config.get("is_localhost", False)
-TTS_enabled = bot_config.get("TTS_enabled", False)
 
 from dotenv import load_dotenv # python-dotenv
 load_dotenv(ENV_PATH)
@@ -222,7 +220,7 @@ async def process_admin_commands(command):
             parts = command.split(" ", 1)
             
             if command.strip() == "model":
-                if not is_localhost:
+                if not bot_config.get("is_localhost"):
                     current_model = bot_config.get("API_model")
                     return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 else:
@@ -230,8 +228,7 @@ async def process_admin_commands(command):
                     return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
                 
             elif len(parts) > 1 and parts[1].strip() != "":
-                
-                if not is_localhost:
+                if not bot_config.get("is_localhost"):
                     
                     bot_config["API_model"] = parts[1].strip()
                     save_config(bot_config)
@@ -405,67 +402,51 @@ async def process_admin_commands(command):
     
     elif command.startswith("localhost"):
         try:
+            BOOLEAN_TRUE = {"true", "yes", "y", "on"}
+            BOOLEAN_FALSE = {"false", "no", "n", "off"}
             parts = command.split(" ", 1)
             
             if command.strip() == "localhost":
-                if bot_config["is_localhost"]:
+                if bot_config.get("is_localhost"):
                     return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
                 else:
                     return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
                 
-            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
-                
-                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
-                    
+            arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+            if arg in BOOLEAN_TRUE:
                     bot_config["is_localhost"] = True
                     save_config(bot_config)
-                    
                     return logging.INFO, f"\n✅ Now using localhost LLM"
-                
-                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
-                
+            elif arg in BOOLEAN_FALSE:
                     bot_config["is_localhost"] = False
                     save_config(bot_config)
-                    
                     return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
-                
-                else:
-                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost *<True/False>"
-                
             else:
                 return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
         except (KeyError, ValueError):
-            return logging.WARNING, "\n❌ Please provide all arguments.  "
+            return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
     
     elif command.startswith("tts"):
         try:
+            BOOLEAN_TRUE = {"true", "yes", "y", "on"}
+            BOOLEAN_FALSE = {"false", "no", "n", "off"}
             parts = command.split(" ", 1)
             
             if command.strip() == "tts":
-                if bot_config["TTS_enabled"]:
-                    return logging.INFO, f"\n📋 TTS is currently ON"
-                else:
-                    return logging.INFO, f"\n📋 TTS is currently OFF"
-                
-            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
-                
-                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
-                    
+                return logging.INFO, f"\n📋 TTS is currently {'ON' if bot_config.get('TTS_enabled') else 'OFF'}"
+
+            arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+            if arg in BOOLEAN_TRUE:
                     bot_config["TTS_enabled"] = True
-                    save_config(TTS_enabled)
-                    
+                    save_config(bot_config)
                     return logging.INFO, f"\n✅ TTS has been enabled"
-                
-                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
-                
+            elif arg in BOOLEAN_FALSE:
                     bot_config["TTS_enabled"] = False
                     save_config(bot_config)
-                    
                     return logging.INFO, f"\n✅ TTS has been disabled"
-                
-                else:
-                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
-                
+
             else:
                 return logging.WARNING, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
         except (KeyError, ValueError):
@@ -477,123 +458,57 @@ async def process_admin_commands(command):
 async def process_combined_messages(session_key, user_id, message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
     combined_prompt = None
     responded = False
-    
+
     try:
-        totalDelay = 8
-        minDelay = rand.randint(800, 3000)/1000
-        typingDelay = max(rand.randint(totalDelay*100, totalDelay*800)/1000, minDelay)
-        
-        # Human typing delay
-        async with message.channel.typing():
-            await asyncio.sleep(typingDelay)
-        
         session = active_sessions[session_key]
         combined_prompt = "\n".join(session['buffer'])
         session['buffer'] = []
 
+        # 1. Simulate human "reading" and "thinking" delay
+        min_delay = bot_config.get("human_delay_min", 1.5)
+        max_delay = bot_config.get("human_delay_max", 4.0)
+        await asyncio.sleep(rand.uniform(min_delay, max_delay))
+
+        # 2. Generate the full response in the background
         response = ""
-        reply_msg = None
-        last_update_time = time.time()
-        update_interval = 1.0 # Edit Discord message every 1.0 seconds to avoid rate limits
+        try:
+            stream = AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
+            async for chunk in stream:
+                response += chunk
+        except APIConnectionError as e:
+            logging.error(f"\n[Connection Error] Could not connect to LLM. Is the server running?\nDetails: {e}")
+            return # Stop processing if we can't get a response
+        except Exception as e:
+            logging.error(f"\nError generating AI response: {e}")
+            return
+
+        if not response:
+            logging.info("\nAI returned an empty response.")
+            return
+
+        # 3. Simulate realistic typing duration based on response length
+        wpm = bot_config.get("human_wpm", 150)
+        words = len(response.split())
+        typing_duration = (words / wpm) * 60
 
         async with message.channel.typing():
-            try:
-                # -----------------------------
-                #       Streaming Loop
-                # -----------------------------
-                stream = AIprompt(combined_prompt, allPrompts, allResponses, is_reply_to_bot, reference_msg)
-                
-                async for chunk in stream:
-                    response += chunk
-                    
-                    # Send the initial message once we have a tiny bit of text
-                    if reply_msg is None and len(response) > 5:
-                        if message.channel.type == discord.ChannelType.private:
-                            reply_msg = await message.channel.send(content=response)
-                        else:
-                            reply_msg = await message.reply(content=response, mention_author=False)
-                        last_update_time = time.time()
-                        
-                    # Periodically edit the message to show new streamed tokens
-                    elif reply_msg is not None and (time.time() - last_update_time) > update_interval:
-                        await reply_msg.edit(content=response)
-                        last_update_time = time.time()
-                
-                # Stream finished! Do one final edit/send to ensure the last tokens are displayed
-                if reply_msg is None:
-                    if message.channel.type == discord.ChannelType.private:
-                        await message.channel.send(content=response)
-                    else:
-                        await message.reply(content=response, mention_author=False)
-                else:
-                    await reply_msg.edit(content=response)
-                
-                responded = True
+            await asyncio.sleep(typing_duration)
 
-                # -----------------------------
-                #       TTS and saving
-                # -----------------------------
-                if TTS_enabled:
-                    clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
-                    has_audio = False
-                    voice_client = None
-                    target_vc = None
-                    audio_path = None
+        # 4. Send the complete message
+        if message.channel.type == discord.ChannelType.private:
+            await message.channel.send(content=response)
+        else:
+            await message.reply(content=response, mention_author=False)
+        
+        responded = True
+        logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
+        allPrompts.append(combined_prompt)
+        allResponses.append(response)
+        await asyncio.to_thread(save_history, serverData)
 
-                    if clean_text:
-                        safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
-                        audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
-
-                        def _make_audio():
-                            samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
-                            sf.write(audio_path, samples, sample_rate)
-
-                        await asyncio.to_thread(_make_audio)
-                        has_audio = True
-
-                    if has_audio:
-                        target_vc = await get_user_voice_channel(client, int(user_id), message)
-                        if target_vc:
-                            is_server = hasattr(target_vc, 'guild') and target_vc.guild
-
-                            if is_server:
-                                voice_client = target_vc.guild.voice_client
-                                activity_id = target_vc.guild.id
-                            else:
-                                voice_client = discord.utils.get(client.voice_clients, channel=target_vc)
-                                activity_id = target_vc.id
-
-                            if voice_client and voice_client.is_connected():
-                                if voice_client.channel != target_vc:
-                                    await voice_client.move_to(target_vc)
-                                    last_voice_activity[activity_id] = time.time()
-                            else:
-                                voice_client = await target_vc.connect()
-                                last_voice_activity[activity_id] = time.time()
-                                
-                            if voice_client.is_playing():
-                                voice_client.stop()
-
-                logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
-                allPrompts.append(combined_prompt)
-                allResponses.append(response)
-                await asyncio.to_thread(save_history, serverData)
-                
-                if TTS_enabled:
-                    if voice_client and has_audio:
-                        if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
-                            audio_source = discord.FFmpegPCMAudio(audio_path)
-                            voice_client.play(audio_source)
-                            activity_id = voice_client.guild.id if getattr(voice_client, 'guild', None) else voice_client.channel.id
-                            last_voice_activity[activity_id] = time.time()
-                        else:
-                            logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
-
-            except APIConnectionError as e:
-                logging.error(f"\n[Connection Error] Could not connect to LM Studio. Is the server running?\nDetails: {e}")
-                
-            except Exception as e:
-                logging.error(f"\nError generating AI response or handling audio: {e}")
+        # 5. Handle TTS after the text response is sent
+        if bot_config.get("TTS_enabled"):
+            await handle_tts_playback(session_key, user_id, message, response)
 
     except asyncio.CancelledError:
         if not responded and combined_prompt and session_key in active_sessions:
@@ -604,6 +519,52 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
             active_sessions[session_key]['task'] = None
             if not active_sessions[session_key]['buffer']:
                 del active_sessions[session_key]
+
+async def handle_tts_playback(session_key, user_id, message, text_response):
+    try:
+        clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', text_response).strip()
+        if not clean_text:
+            return
+
+        # --- Audio Generation ---
+        safe_key = re.sub(r'[^A-Za-z0-9_-]', '_', session_key)
+        audio_path = os.path.join(DATA_DIR, f"output_{safe_key}.wav")
+
+        def _make_audio():
+            samples, sample_rate = kokoro.create(clean_text, voice="am_adam", speed=1.0, lang="en-us")
+            sf.write(audio_path, samples, sample_rate)
+
+        await asyncio.to_thread(_make_audio)
+
+        # --- Voice Client Connection ---
+        target_vc = await get_user_voice_channel(client, int(user_id), message)
+        if not target_vc:
+            return
+
+        is_server = hasattr(target_vc, 'guild') and target_vc.guild
+        activity_id = target_vc.guild.id if is_server else target_vc.id
+        voice_client = target_vc.guild.voice_client if is_server else discord.utils.get(client.voice_clients, channel=target_vc)
+
+        if voice_client and voice_client.is_connected():
+            if voice_client.channel != target_vc:
+                await voice_client.move_to(target_vc)
+        else:
+            voice_client = await target_vc.connect()
+        
+        last_voice_activity[activity_id] = time.time()
+
+        # --- Playback ---
+        if voice_client.is_playing():
+            voice_client.stop()
+
+        if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
+            audio_source = discord.FFmpegPCMAudio(audio_path)
+            voice_client.play(audio_source)
+            last_voice_activity[activity_id] = time.time()
+        else:
+            logging.warning(f"\n⏱️ {user_id} never joined the call — skipping playback")
+    except Exception as e:
+        logging.error(f"\nError during TTS handling: {e}")
 
 async def terminal_listener():
     await client.wait_until_ready()
@@ -660,10 +621,11 @@ async def speak_ai_response(session_key, user_id, voice_client):
             # THE NEW STREAMING LOOP
             # -----------------------------
             response = ""
-            async for chunk in AIprompt(combined_prompt, allPrompts, allResponses):
+            stream = AIprompt(combined_prompt, allPrompts, allResponses)
+            async for chunk in stream:
                 response += chunk
             
-            # Since AIprompt now filters <think> tags natively, we just clean characters
+            # AIprompt filters <think> tags, so we just clean remaining characters
             clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
             if not clean_text:
@@ -717,14 +679,14 @@ async def speak_ai_response(session_key, user_id, voice_client):
 
 async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
     # Get and validate model
-    if not is_localhost:
+    if not bot_config.get("is_localhost"):
         AIprompt.model = bot_config.get("API_model", None)
         
         if not AIprompt.model:
             raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
             
         chatClient = AsyncOpenAI(
-            base_url="https://api.groq.com/openai/v1",
+            base_url=os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1"),
             api_key=os.environ.get("GROQ_API_KEY")
         )
         
