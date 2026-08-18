@@ -16,3 +16,7 @@ soundfile
 faster-whisper
 numpy
 scipy
+
+# Web Search
+tavily-python
+httpx
