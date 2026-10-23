@@ -1,6 +1,7 @@
 import os
 import httpx
 import logging
+from datetime import datetime
 
 try:
     from tavily import AsyncTavilyClient, UsageLimitExceededError
@@ -8,24 +9,36 @@ except ImportError:
     AsyncTavilyClient = None
     UsageLimitExceededError = Exception
 
-async def get_search_query(user_message: str, client, is_localhost: bool) -> str | None:
+async def get_search_query(user_message: str, client, is_localhost: bool, past_prompts: list = None, past_responses: list = None) -> str | None:
     # Asks a small free model if a web search is needed for the given user_message.
     # Returns the search query string if needed, otherwise None.
+    past_context = ""
+    if past_prompts and past_responses:
+        past_context = "Conversation History:\n"
+        for p, r in zip(past_prompts, past_responses):
+            past_context += f"User: {p}\nAssistant: {r}\n"
+
     prompt = (
-        "Determine if the following user message requires a web search to be answered accurately "
-        "(e.g., current events, real-time info, specific unknown facts)."
-        "If it does, reply with the optimal search query and nothing else. "
-        "If it does not, reply strictly with the exact word 'NO_SEARCH'.\n\n"
-        f"User message: {user_message}"
+        f"Current date and time (YYYY-MM-DD HH:MM:SS): {datetime.today().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "Determine if the user's latest message requires a web search to be answered accurately "
+        "(e.g., current events, real-time info, specific unknown facts).\n"
+        "If a search is needed, generate a concise, keyword-focused web search query.\n"
+        "Rules for generating the query:\n"
+        "- Preserve the exact scope of the user's request. If the request is broad (e.g., 'what happened in Europe yesterday?'), keep the query broad (e.g., 'Europe news October 21 2026').\n"
+        "- Never invent, assume, or narrow down to specific topics, conflicts, people, or events not explicitly mentioned by the user.\n"
+        "- Only use conversation history to resolve pronouns or explicit follow-ups to the immediately preceding topic.\n"
+        "- Resolve relative dates (like 'today', 'yesterday', 'last week') using the current date provided above.\n"
+        "- If the user is just conversing, asking for clarification on previous points, or if no search is needed, reply strictly with the exact word 'NONE'.\n"
+        "Reply ONLY with the search query or 'NONE'. Do not include quotes, punctuation, or any other text.\n\n"
     )
+    if past_context:
+        prompt += f"{past_context}\n"
+
+    prompt += f"Latest User message: {user_message}"
 
     try:
-        # For localhost, we might just use whatever model is currently loaded.
-        # But for API, we use the free llama-3.1-8b-instruct
         model = "meta-llama/llama-3.1-8b-instruct" if not is_localhost else getattr(client, "model", None)
-        
-        # Some local clients might ignore the model parameter, but we'll pass it.
-        # We need to make sure we handle it gracefully if localhost model is not specified properly.
+
         kwargs = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
@@ -36,15 +49,17 @@ async def get_search_query(user_message: str, client, is_localhost: bool) -> str
 
         response = await client.chat.completions.create(**kwargs)
         result = response.choices[0].message.content.strip()
-        
-        # If the model wraps the output in think tags (e.g., deepseek), we should clean it
+
         if "</think>" in result:
             _, clean_text = result.split("</think>", 1)
             result = clean_text.strip()
 
-        if result.upper() == "NO_SEARCH" or "NO_SEARCH" in result.upper():
+        result = result.strip('"\'')
+        logging.info(f"🔎 Web search for query: {result}")
+
+        if result.upper() in {"NONE", "NO_SEARCH"} or "NO_SEARCH" in result.upper():
             return None
-            
+
         return result
     except Exception as e:
         logging.error(f"Error determining search query: {e}")

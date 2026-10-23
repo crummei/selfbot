@@ -33,11 +33,10 @@ from src.paths import SRC_DIR, DATA_DIR, ENV_PATH
 model_path = os.path.join(DATA_DIR, "kokoro-v1.0.fp16.onnx")
 voices_path = os.path.join(DATA_DIR, "voices-v1.0.bin")
 
-from src.config import load_config, save_config
+from src.config import load_config, save_config, load_personalities, save_personalities
 bot_config = load_config()
+bot_personalities = load_personalities()
 account_lists = bot_config.get("account_lists", {})
-is_localhost = bot_config.get("is_localhost", False)
-TTS_enabled = bot_config.get("TTS_enabled", False)
 
 from dotenv import load_dotenv # python-dotenv
 load_dotenv(ENV_PATH)
@@ -46,7 +45,7 @@ from src.websearch import get_search_query, perform_web_search
 # llama-3.3-70b-versatile
 # llama-3.1-8b-instant
 
-# Has weird <think> Thought </think> prefix
+# Has weird <think> Thought  </think> prefix
     # deepseek-r1-distill-llama-70b
     # deepseek-r1-distill-qwen-32b
 
@@ -54,6 +53,10 @@ from src.websearch import get_search_query, perform_web_search
 
 active_sessions = {}
 last_voice_activity = {}
+
+# Global API Clients to reuse connections
+_api_client = None
+_local_client = None
 
 client = commands.Bot(
     command_prefix='',
@@ -65,18 +68,43 @@ client = commands.Bot(
 # -----------------------------
 
 async def get_user_voice_channel(client: discord.Client, target_uid: int, message: discord.Message = None):
-    # Check if the message was sent in a groupchat
     if message and isinstance(message.channel, discord.GroupChannel):
         return message.channel
 
-    # Iterate through all guilds
-    for guild in client.guilds:
-        member = guild.get_member(target_uid)
-        
+    if message and getattr(message, 'guild', None):
+        member = message.guild.get_member(target_uid)
         if member and member.voice and member.voice.channel:
             return member.voice.channel
-            
+
+    for guild in client.guilds:
+        member = guild.get_member(target_uid)
+        if member and member.voice and member.voice.channel:
+            return member.voice.channel
+
     return None
+
+def is_user_in_dict(target_id, data_dict=account_lists):
+    for key, value in data_dict.items():
+        if key == 'USER_ID' and value == target_id:
+            return True
+        elif isinstance(value, dict):
+            if is_user_in_dict(target_id, value):
+                return True
+    return False
+
+def chunk_text(text: str, chunk_size: int = 2000) -> list[str]:
+    chunks = []
+    while len(text) > chunk_size:
+        split_idx = text.rfind('\n', 0, chunk_size)
+        if split_idx == -1:
+            split_idx = text.rfind(' ', 0, chunk_size)
+            if split_idx == -1:
+                split_idx = chunk_size
+        chunks.append(text[:split_idx].strip())
+        text = text[split_idx:].strip()
+    if text:
+        chunks.append(text.strip())
+    return chunks
 
 async def voice_timeout():
     await client.wait_until_ready()
@@ -136,17 +164,6 @@ async def wait_for_user_in_vc(target_vc, user_id: int, timeout: float = 60, poll
 
     return is_user_in_vc(target_vc, user_id)
 
-async def is_user_in_dict(target_id, data_dict = account_lists):
-    for key, value in data_dict.items():
-        if key == 'USER_ID' and value == target_id:
-            return True
-        
-        elif isinstance(value, dict):
-            if await is_user_in_dict(target_id, value):
-                return True
-            
-    return False
-
 def normalize_command(raw: str) -> str:
     parts = raw.split(" ", 1)
     parts[0] = parts[0].lower()
@@ -158,210 +175,162 @@ def normalize_command(raw: str) -> str:
 # -----------------------------
 
 async def process_admin_commands(command):
-    # if command in {"stop", "quit", "exit", "q"}:
-        
-    #     if client.is_ready():
-    #         return logging.INFO, "\n💀 Shutting down the bot from terminal..."    
-    #         await client.close()
-    #     else:
-    #         return logging.WARNING, "\n❌ Bot isn't running..."
-        
-    # elif command in {"start", "run"}:
+    global bot_config, bot_personalities, account_lists
+    BOOLEAN_TRUE = {"true", "yes", "y", "on"}
+    BOOLEAN_FALSE = {"false", "no", "n", "off"}
 
-    #     if client.is_closed():
-    #         await client.run(os.getenv('PASTIDITING'))
-    #         return logging.INFO, "\n🤑 Running the bot from terminal..."
-            
-    #     else:
-    #         return logging.WARNING, "\n⚡ Bot is already running..."
     if command.startswith("help"):
-        try:
-            parts = command.split(" ", 1)
-            
-            if command.strip() == "help":
-                return logging.INFO, f"""
+        if command.strip() == "help":
+            return logging.INFO, """
 -# Values marked with * are optional.
 -# Values inside () show a list of choices.
 -# Values inside <> are variables, meant to be filled with the actual data.
 
 > - model | View/Change the current LLM model | Usage: model *<model_name>
-> - instruct | View/Change the current instruction set | Usage: instruct (list | add <text> | delete <num> | <num> <text>)
+> - instruct | View/Change the current instruction set | Usage: instruct (list | show | set <text> | add <text> | delete <num> | <num> <text>)
+> - personality | Toggle between instruction sets | Usage: personality *<name>
 > - history | Delete history for a specific user/server or all | Usage: history delete (all | user <user_id> | server <server_id>)
 > - reload sheets | Reload Google Sheets data to fetch new/edited instructions | Usage: reload sheets
 > - localhost | Check current status or Enable/Disable using localhost LLM | Usage: localhost *<True/False>
+> - temperature | View/Change the current LLM temperature | Usage: temperature *<number>
 > - tts | Check current status or Enable/Disable joining VC and speaking the response | Usage: tts *<True/False>
+> - refresh | Refresh config.json and personalities.json in memory | Usage: refresh
+> - status | Check bot status and active sessions | Usage: status
 """
 
-        #     elif len(parts) > 1 and parts[1].strip() != "":
-                
-        #         if not is_localhost:
-                    
-        #             bot_config["API_model"] = parts[1].strip()
-        #             save_config(bot_config)
-                
-        #             return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
-                
-        #         else:
-                    
-        #             bot_config["local_model"] = parts[1].strip()
-        #             save_config(bot_config)
-                
-        #             return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
-                
-        #     else:
-        #         return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
-        
-        # except IndexError:
-        #     return logging.WARNING, "\n❌ You are missing the text. Usage: model <text>"
-        
-        except Exception as e:
-            return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
-    
     elif command.startswith("model"):
-        try:
-            parts = command.split(" ", 1)
-            
-            if command.strip() == "model":
-                if not is_localhost:
-                    current_model = bot_config.get("API_model")
-                    return logging.INFO, f"\n📋 Current API LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
-                else:
-                    current_model = bot_config.get("local_model")
-                    return logging.INFO, f"\n📋 Current localhost LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
-                
-            elif len(parts) > 1 and parts[1].strip() != "":
-                
-                if not is_localhost:
-                    
-                    bot_config["API_model"] = parts[1].strip()
-                    save_config(bot_config)
-                
-                    return logging.INFO, f"\n✅ Switching API model to: \"{bot_config.get("API_model", {})}\""
-                
-                else:
-                    
-                    bot_config["local_model"] = parts[1].strip()
-                    save_config(bot_config)
-                
-                    return logging.INFO, f"\n✅ Switching local model to: \"{bot_config.get("local_model", {})}\""
-                
-            else:
-                return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
-        
-        except IndexError:
-            return logging.WARNING, "\n❌ You are missing the text. Usage: model <text>"
-        
-        except Exception as e:
-            return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
-        
+        parts = command.split(" ", 1)
+        is_localhost = bot_config.get("is_localhost", False)
+
+        if command.strip() == "model":
+            key = "LOCAL_MODEL" if is_localhost else "API_MODEL"
+            label = "localhost" if is_localhost else "API"
+            current_model = bot_config.get(key)
+            return logging.INFO, f"\n📋 Current {label} LLM: {f'\"{current_model}\"' if current_model else 'None (Not Set)'}"
+        elif len(parts) > 1 and parts[1].strip():
+            key = "LOCAL_MODEL" if is_localhost else "API_MODEL"
+            label = "local" if is_localhost else "API"
+            bot_config[key] = parts[1].strip()
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, f"\n✅ Switching {label} model to: \"{bot_config[key]}\""
+        else:
+            return logging.WARNING, "\n❌ Please provide a model name. Usage: model *<model_name>"
+
     elif command.startswith("instruct"):
+        parts = command.split(" ", 2)
+        if len(parts) > 1 and parts[1].strip():
+            action = parts[1].strip()
+            if action in {"list", "show"}:
+                instructions = bot_config.get("instructions")
+                if instructions:
+                    if isinstance(instructions, list):
+                        formatted = "\n".join(f"{i}. {inst}" for i, inst in enumerate(instructions, start=1))
+                    else:
+                        formatted = str(instructions)
+                    return logging.INFO, f"\n📜 Current Instructions:\n{formatted}"
+                return logging.WARNING, "\n⚠️ There are currently no instructions saved."
+            elif action == "set":
+                if len(parts) > 2 and parts[2].strip():
+                    bot_config["instructions"] = [parts[2].strip()]
+                    await asyncio.to_thread(save_config, bot_config)
+                    return logging.INFO, "\n✅ Updated instructions."
+                return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct set <text>"
+            elif action in {"delete", "remove"}:
+                if len(parts) > 2 and parts[2].strip():
+                    try:
+                        idx = int(parts[2].strip()) - 1
+                        instructions = bot_config.get("instructions", [])
+                        if isinstance(instructions, list) and 0 <= idx < len(instructions):
+                            removed = instructions.pop(idx)
+                            await asyncio.to_thread(save_config, bot_config)
+                            return logging.INFO, f"\n🗑️  Removed instruction: Pos. {idx + 1} | {removed}"
+                        return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
+                    except ValueError:
+                        return logging.WARNING, f"\n❌ Invalid position number: {parts[2].strip()}"
+                return logging.WARNING, "\n❌ Please provide a position number. Usage: instruct delete <number>"
+            elif action == "add":
+                if len(parts) > 2 and parts[2].strip():
+                    if "instructions" not in bot_config or not isinstance(bot_config["instructions"], list):
+                        bot_config["instructions"] = [bot_config["instructions"]] if bot_config.get("instructions") else []
+                    new_inst = parts[2].strip()
+                    bot_config["instructions"].append(new_inst)
+                    await asyncio.to_thread(save_config, bot_config)
+                    return logging.INFO, f"\n✅ Added new instruction at Pos. {len(bot_config['instructions'])}: \"{new_inst}\""
+                return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct add <text>"
+            elif action.isdigit():
+                if len(parts) > 2 and parts[2].strip():
+                    idx = int(action) - 1
+                    instructions = bot_config.get("instructions", [])
+                    if isinstance(instructions, list) and 0 <= idx < len(instructions):
+                        instructions[idx] = parts[2].strip()
+                        await asyncio.to_thread(save_config, bot_config)
+                        return logging.INFO, f"\n✅ Switched instruction {action} to: \"{parts[2].strip()}\""
+                    return logging.WARNING, f"\n❌ No instruction exists in position: {action}"
+                return logging.WARNING, "\n❌ Please provide the replacement text. Usage: instruct <number> <text>"
+            else:
+                return logging.WARNING, "\n❌ Invalid command. Usage: instruct [list | show | set <text> | add <text> | delete <num> | <num> <text>]"
+        return logging.WARNING, "\n❌ Missing action. Usage: instruct [list | show | set <text> | add <text> | delete <num> | <num> <text>]"
+
+    elif command.startswith("personality"):
+        parts = command.split(" ", 1)
+        if command.strip() == "personality":
+            return logging.INFO, f"\n📋 Available personalities: {', '.join(bot_personalities.keys())}"
+        arg = parts[1].strip()
+        if arg in bot_personalities:
+            bot_config["instructions"] = bot_personalities[arg]
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, f"\n✅ Loaded personality: {arg}"
+        return logging.WARNING, f"\n❌ Personality '{arg}' not found. Available: {', '.join(bot_personalities.keys())}"
+
+    elif command.startswith("localhost"):
+        parts = command.split(" ", 1)
+        if command.strip() == "localhost":
+            if bot_config.get("is_localhost"):
+                return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get('LOCAL_MODEL', '')}"
+            return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get('API_MODEL', '')}"
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+        if arg in BOOLEAN_TRUE:
+            bot_config["is_localhost"] = True
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, "\n✅ Now using localhost LLM"
+        elif arg in BOOLEAN_FALSE:
+            bot_config["is_localhost"] = False
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get('API_MODEL', '')}"
+        return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
+
+    elif command.startswith("tts"):
+        parts = command.split(" ", 1)
+        if command.strip() == "tts":
+            return logging.INFO, f"\n📋 TTS is currently {'ON' if bot_config.get('TTS_enabled') else 'OFF'}"
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+        if arg in BOOLEAN_TRUE:
+            bot_config["TTS_enabled"] = True
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, "\n✅ TTS has been enabled"
+        elif arg in BOOLEAN_FALSE:
+            bot_config["TTS_enabled"] = False
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, "\n✅ TTS has been disabled"
+        return logging.WARNING, "\n❌ Please provide all arguments. Usage: tts *<True/False>"
+
+    elif command.startswith("temperature"):
+        parts = command.split(" ", 1)
+        if command.strip() == "temperature":
+            return logging.INFO, f"\n📋 Current temperature: {bot_config.get('temperature', 0.6)}"
         try:
-            parts = command.split(" ", 2)
-            
-            if len(parts) > 1 and parts[1].strip() != "":
-                
-                action = parts[1].strip()
-                
-                # List all existing instructions
-                if action == "list":
-                    if "instructions" in bot_config and bot_config["instructions"]:
-                        instruction_lines = [
-                            f"{index}. {instruction}" 
-                            for index, instruction in enumerate(bot_config["instructions"], start=1)
-                        ]
-                        formatted_list = "\n".join(instruction_lines)
-                        return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
-                    else:
-                        return logging.WARNING, "\n⚠️ There are currently no instructions saved."
-
-                # Experiment, unfinished...
-                # if action == "list":
-                #     if len(parts) > 2 and parts[2].strip() == "selected":
-                #         if "instructions" in bot_config and bot_config["instructions"]:
-                #             instruction_lines = [
-                #                 f"{index}. {instruction}" 
-                #                 for index, instruction in enumerate(bot_config["instructions"], start=1)
-                #             ]
-                #             formatted_list = "\n".join(instruction_lines)
-                #             return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
-                #         else:
-                #             return logging.WARNING, "\n⚠️ There are currently no instructions saved."
-                    
-                #     if len(parts) > 2 and parts[2].strip() == "all":
-                #         if "instructions" in bot_config and bot_config["instructions"]:
-                #             instruction_lines = [
-                #                 f"{index}. {instruction}" 
-                #                 for index, instruction in enumerate(bot_config["instructions"], start=1)
-                #             ]
-                #             formatted_list = "\n".join(instruction_lines)
-                #             return logging.INFO, f"\n📜 Current Instructions:\n{formatted_list}"
-                #         else:
-                #             return logging.WARNING, "\n⚠️ There are currently no instructions saved."     
-                
-                # Delete/remove an instruction
-                elif action in {"delete", "remove"}:
-                    if len(parts) > 2 and parts[2].strip() != "":
-                        try:
-                            index_to_remove = int(parts[2].strip()) - 1
-                            
-                            if "instructions" in bot_config and 0 <= index_to_remove < len(bot_config["instructions"]):
-                                removed_value = bot_config["instructions"].pop(index_to_remove)
-                                save_config(bot_config)
-                                return logging.INFO, f"\n🗑️  Removed instruction: Pos. {parts[2].strip()} | {removed_value}"
-                            else:
-                                return logging.WARNING, f"\n❌ No instruction exists in position: {parts[2].strip()}"
-                                
-                        except ValueError:
-                            return logging.WARNING, f"\n❌ Invalid position number: {parts[2].strip()}"
-                    else:
-                        return logging.WARNING, "\n❌ Please provide a position number. Usage: instruct delete <number>"
-
-                # Add an additional instruction entry
-                elif action == "add":
-                    if len(parts) > 2 and parts[2].strip() != "":
-                        if "instructions" not in bot_config:
-                            bot_config["instructions"] = []
-                            
-                        # If it loads as a dictionary, convert to list
-                        elif isinstance(bot_config["instructions"], dict):
-                            bot_config["instructions"] = list(bot_config["instructions"].values())
-                            
-                        new_instruction = parts[2].strip()
-                        bot_config["instructions"].append(new_instruction)
-                        save_config(bot_config)
-                        
-                        new_position = len(bot_config["instructions"])
-                        return logging.INFO, f"\n✅ Added new instruction at Pos. {new_position}: \"{new_instruction}\""
-                        
-                    else:
-                        return logging.WARNING, "\n❌ Please provide the instruction text. Usage: instruct add <text>"
-                 
-                # Replace an instruction
-                elif action.isdigit():
-                    if len(parts) > 2 and parts[2].strip() != "":
-                        index_to_replace = int(action) - 1
-                        
-                        if "instructions" in bot_config and 0 <= index_to_replace < len(bot_config["instructions"]):
-                            bot_config["instructions"][index_to_replace] = parts[2].strip()
-                            save_config(bot_config)
-                            return logging.INFO, f"\n✅ Switched instruction {action} to: \"{parts[2].strip()}\""
-                        else:
-                            return logging.WARNING, f"\n❌ No instruction exists in position: {action}"
-                    else:
-                        return logging.WARNING, "\n❌ Please provide the replacement text. Usage: instruct <number> <text>"
-                
-                # Catch-all error
-                else:
-                    return logging.WARNING, "\n❌ Invalid command. Usage: instruct [list | add <text> | delete <num> | <num> <text>]"
-        
+            temp = float(parts[1].strip())
+            bot_config["temperature"] = temp
+            await asyncio.to_thread(save_config, bot_config)
+            return logging.INFO, f"\n✅ Changed temperature to: {temp}"
         except ValueError:
-            return logging.WARNING, "\n❌ That is not a valid number! Please use digits."
-        
-        except IndexError:
-            return logging.WARNING, "\n❌ You are missing the text. Usage: instruct add <text>"
-        
-        except Exception as e:
-            return logging.ERROR, f"\n❌ Something completely unexpected broke: {e}"
+            return logging.WARNING, "\n❌ Please provide a valid number. Usage: temperature *<number>"
+
+    elif command == "refresh":
+        bot_config = load_config()
+        bot_personalities = load_personalities()
+        account_lists = bot_config.get("account_lists", {})
+        return logging.INFO, "\n✅ Configuration refreshed from config.json and personalities.json"
 
     elif command.startswith("history"):
         try:
@@ -373,15 +342,15 @@ async def process_admin_commands(command):
                 if target == "all":
                     serverData["user"].clear()
                     serverData["server"].clear()
-                    save_history(serverData)
+                    await asyncio.to_thread(save_history, serverData)
                     
-                    return logging.INFO, f"\n✅ Cleared all history!"
+                    return logging.INFO, "\n✅ Cleared all history!"
                 
                 elif target in ["user", "server"] and len(parts) > 3 and parts[3].strip() != "":
                     ID = parts[3].strip()
                     
                     if serverData[target].pop(ID, None):
-                        save_history(serverData)
+                        await asyncio.to_thread(save_history, serverData)
                     
                         return logging.INFO, f"\n✅ Cleared history for {target}: \"{ID}\""
                     
@@ -402,81 +371,14 @@ async def process_admin_commands(command):
         command_response = "\n🔄 Reloading Google Sheets data..."
         AIprompt.instructionsDict = await asyncio.to_thread(src.data.sheetsapi.main)
         return logging.INFO, command_response + "\n✅ Sheets data reloaded!"
-    
-    elif command.startswith("localhost"):
-        try:
-            parts = command.split(" ", 1)
-            
-            if command.strip() == "localhost":
-                if bot_config["is_localhost"]:
-                    return logging.INFO, f"\n📋 Currently using localhost LLM: {bot_config.get("local_model", {})}"
-                else:
-                    return logging.INFO, f"\n📋 Currently using API LLM: {bot_config.get("API_model", {})}"
-                
-            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
-                
-                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
-                    
-                    bot_config["is_localhost"] = True
-                    save_config(bot_config)
-                    
-                    return logging.INFO, f"\n✅ Now using localhost LLM"
-                
-                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
-                
-                    bot_config["is_localhost"] = False
-                    save_config(bot_config)
-                    
-                    return logging.INFO, f"\n✅ Now using API LLM: {bot_config.get("API_model", {})}"
-                
-                else:
-                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: localhost *<True/False>"
-                
-            else:
-                return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
-        except (KeyError, ValueError):
-            return logging.WARNING, "\n❌ Please provide all arguments. Usage: localhost *<True/False>"
-    
-    elif command.startswith("tts"):
-        try:
-            parts = command.split(" ", 1)
-            
-            if command.strip() == "tts":
-                if bot_config["TTS_enabled"]:
-                    return logging.INFO, f"\n📋 TTS is currently ON"
-                else:
-                    return logging.INFO, f"\n📋 TTS is currently OFF"
-                
-            elif len(parts) > 1 and parts[1].strip().lower() in ["true", "yes", "y", "on", "false", "no", "n", "off"]:
-                
-                if parts[1].strip().lower() in ["true", "yes", "y", "on"]:
-                    
-                    bot_config["TTS_enabled"] = True
-                    save_config(TTS_enabled)
-                    
-                    return logging.INFO, f"\n✅ TTS has been enabled"
-                
-                elif parts[1].strip().lower() in ["false", "no", "n", "off"]:
-                
-                    bot_config["TTS_enabled"] = False
-                    save_config(bot_config)
-                    
-                    return logging.INFO, f"\n✅ TTS has been disabled"
-                
-                else:
-                    return logging.INFO, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
-                
-            else:
-                return logging.WARNING, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
-        except (KeyError, ValueError):
-            return logging.WARNING, f"\n❌ Please provide all arguments. Usage: tts *<True/False>"
-        
+
     elif command != "":
         return logging.WARNING, f"\n🤨 Unknown command: {command}"
 
 async def process_combined_messages(session_key, user_id, message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
     combined_prompt = None
     responded = False
+    tts_enabled = bot_config.get("TTS_enabled", False)
     
     try:
         totalDelay = 8
@@ -502,7 +404,7 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                 response = chatCompletion.choices[0].message.content
                 response = re.sub(r"<think>.*?</think>\s*", '', response, flags=re.DOTALL).strip()
                 
-                if TTS_enabled:
+                if tts_enabled:
                     clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
                     has_audio = False
@@ -540,7 +442,6 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                                 if voice_client.channel != target_vc:
                                     await voice_client.move_to(target_vc)
                                     last_voice_activity[activity_id] = time.time()
-                                    
                             else:
                                 voice_client = await target_vc.connect()
                                 last_voice_activity[activity_id] = time.time()
@@ -549,19 +450,28 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
                                 voice_client.stop()
 
                 # Send the text reply
-                if message.channel.type == discord.ChannelType.private:
-                    await message.channel.send(content=response)
-                    
-                else:
-                    await message.reply(content=response, mention_author=False)
+                chunks = chunk_text(response, 2000) if len(response) > 2000 else [response]
+                for i, chunk in enumerate(chunks):
+                    if not chunk:
+                        continue
+                    if i == 0 and message.channel.type != discord.ChannelType.private:
+                        await message.reply(content=chunk, mention_author=False)
+                    else:
+                        await message.channel.send(content=chunk)
 
                 responded = True
 
                 logging.info(f"\n==========================\nUser:\n{combined_prompt}\n\nResponse: {response}\n==========================")
                 allPrompts.append(combined_prompt)
                 allResponses.append(response)
+                
+                MAX_HISTORY = 50
+                if len(allPrompts) > MAX_HISTORY:
+                    allPrompts[:] = allPrompts[-MAX_HISTORY:]
+                    allResponses[:] = allResponses[-MAX_HISTORY:]
                 await asyncio.to_thread(save_history, serverData)
-                if TTS_enabled:
+                
+                if tts_enabled:
                     # Voice playback is best-effort from here — failures shouldn't undo the above
                     if voice_client and has_audio:
                         if await wait_for_user_in_vc(target_vc, user_id, timeout=60):
@@ -594,7 +504,7 @@ async def process_combined_messages(session_key, user_id, message, allPrompts, a
 async def terminal_listener():
     await client.wait_until_ready()
     
-    while client.is_ready():
+    while not client.is_closed():
         try:
             user_input = await asyncio.to_thread(input)
             command = normalize_command(user_input.strip())
@@ -646,7 +556,8 @@ async def speak_ai_response(session_key, user_id, voice_client):
         try:
             chatCompletion = await AIprompt(combined_prompt, allPrompts, allResponses)
             response = chatCompletion.choices[0].message.content
-            response = re.sub(r"<think>.*?</think>", '', response, flags=re.DOTALL)
+            response = re.sub(r"<think>.*?</think>",
+                '', response, flags=re.DOTALL)
             clean_text = re.sub(r'''[^a-zA-Z0-9\s.,?!'&%-]''', '', response).strip()
 
             if not clean_text:
@@ -698,62 +609,69 @@ async def speak_ai_response(session_key, user_id, voice_client):
 #     Response Generation
 # -----------------------------
 
-async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = False, reference_msg = None):
-    # Get and validate model
+async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot=False, reference_msg=None):
+    global bot_config, _api_client, _local_client
+    is_localhost = bot_config.get("is_localhost", False)
+
     if not is_localhost:
-        AIprompt.model = bot_config.get("API_model", None)
-        
+        AIprompt.model = bot_config.get("API_MODEL")
         if not AIprompt.model:
             raise ValueError("No API model has been set. Use '*model <model_name>' to set one.")
-            
-        chatClient = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ.get("OPENROUTER_API_KEY")
-        )
-        
+        if _api_client is None:
+            _api_client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.environ.get("OPENROUTER_API_KEY")
+            )
+        chatClient = _api_client
     else:
-        AIprompt.model = bot_config.get("local_model", None)
-        
+        AIprompt.model = bot_config.get("LOCAL_MODEL")
         if not AIprompt.model:
             raise ValueError("No local model has been set. Use '*model <model_name>' to set one.")
-        
-        local_ip = os.environ.get("LM_STUDIO_IP", "127.0.0.1")
+        if _local_client is None:
+            local_ip = os.environ.get("LM_STUDIO_IP", "127.0.0.1")
+            _local_client = AsyncOpenAI(
+                base_url=f"http://{local_ip}:1234/v1",
+                api_key="lm-studio"
+            )
+        chatClient = _local_client
 
-        chatClient = AsyncOpenAI(
-            base_url=f"http://{local_ip}:1234/v1",
-            api_key="lm-studio"
-        )
-    
-    # Build full prompt
     messages = []
-    
+
     if bot_config.get("instructions"):
-        for cell_ref in bot_config["instructions"]:
-            instruction_text = AIprompt.instructionsDict.get(str(cell_ref))
-        
-            if instruction_text:
-                messages.append({
-                    'role': 'system',
-                    'content': instruction_text, 
-                })
-    
+        instructions = bot_config["instructions"]
+        sheets_dict = getattr(AIprompt, "instructionsDict", None) or {}
+        if isinstance(instructions, list):
+            resolved_lines = []
+            for item in instructions:
+                item_str = str(item)
+                # If item matches a Google Sheets cell reference, use the sheet value; otherwise use raw text
+                resolved_lines.append(sheets_dict.get(item_str, item_str))
+            parsed_instructions = "\n".join(line for line in resolved_lines if line)
+        else:
+            item_str = str(instructions)
+            parsed_instructions = sheets_dict.get(item_str, item_str)
+
+        if parsed_instructions.strip():
+            messages.append({
+                'role': 'system',
+                'content': parsed_instructions,
+            })
+
     past_prompts = allPrompts[-3:]
     past_responses = allResponses[-3:]
-    
+
     for p, r in zip(past_prompts, past_responses):
         messages.append({'role': 'user', 'content': p})
         messages.append({'role': 'assistant', 'content': r})
 
-    if is_reply_to_bot and reference_msg is not None:
+    if is_reply_to_bot and reference_msg is not None and reference_msg.content not in past_responses:
         messages.append({
             'role': 'system',
             'content': f"User is replying to \"\"\"\n\n{reference_msg.content}\n\"\"\""
         })
 
-    # Check if we need to search the web
-    search_query = await get_search_query(user_message, chatClient, is_localhost)
+    search_query = await get_search_query(user_message, chatClient, is_localhost, past_prompts, past_responses)
     if search_query:
-        logging.info(f"🔎 Web search required for query: {search_query}")
         search_context = await perform_web_search(search_query)
         user_message = f"Web Search Context:\n{search_context}\n\nUser: {user_message}"
 
@@ -761,11 +679,10 @@ async def AIprompt(user_message, allPrompts, allResponses, is_reply_to_bot = Fal
         'role': 'user',
         'content': user_message
     })
-    
-    # Start chatCompletion
+
     chatCompletion = await chatClient.chat.completions.create(
         model=AIprompt.model,
-        temperature=1.3,
+        temperature=bot_config.get('temperature', 0.6),
         messages=messages,
     )
     return chatCompletion
@@ -792,9 +709,14 @@ async def on_message(message):
     if str(user_message).startswith("."):
         return
     
-    if str(user_message).startswith("*") and await is_user_in_dict(message.author.id):
-        log_level, log_message = await process_admin_commands(normalize_command(user_message.lstrip('*')))
-        await message.channel.send(log_message)
+    if str(user_message).startswith("*") and is_user_in_dict(message.author.id, account_lists):
+        result = await process_admin_commands(normalize_command(user_message.lstrip('*')))
+        if isinstance(result, tuple):
+            _, log_message = result
+        else:
+            log_message = result
+        if log_message:
+            await message.channel.send(log_message)
         return
     
     is_reply_to_bot = False
@@ -895,7 +817,7 @@ async def on_message(message):
             # Add the new message to the buffer
             session['buffer'].append(user_message)
             
-            # Cancel the existing task if it's currently waiting or generating½
+            # Cancel the existing task if it's currently waiting or generating
             if session['task'] and not session['task'].done():
                 session['task'].cancel()
                 
